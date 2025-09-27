@@ -1,0 +1,25 @@
+TIME=06:45
+TEXT=Guten Morgen :)
+DAYS=Mo,Di,Mi,Do,Fr
+STATUS=Aktiv
+---
+TIME=07:15
+TEXT=Hab einen schönen Tag!
+DAYS=Mo,Di,Mi,Do,Fr
+STATUS=Aktiv
+---
+TIME=19:45
+TEXT=Bettzeit! Schlaf gut.
+DAYS=Mo,Di,Mi,Do,Fr
+STATUS=Aktiv
+---
+TIME=22:03
+TEXT=Schwimmen!
+DAYS=Mo,Di,Fr,Sa,So
+STATUS=Inaktiv
+---
+TIME=08:00
+TEXT=Zusatzwecker!
+DAYS=Mo,Mi,Fr
+STATUS=Inaktiv
+---

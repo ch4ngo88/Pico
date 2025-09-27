@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# MicroPython specific
+*.mpy
+
+# Log files
+*.log
+sd/debug_log.txt
+
+# Temporary files
+*.tmp
+*.temp
+*~
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Personal config files (sensitive data)
+sd/wifis.txt
+
+# Backup files
+*.bak
+*.backup
+
+# Development files
+DEVmountSD.py

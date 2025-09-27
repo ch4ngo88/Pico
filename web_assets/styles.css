@@ -1,0 +1,151 @@
+body {
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  background: linear-gradient(to bottom right, #ffe0f0, #ffc1de);
+  color: #5c1a33;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+header {
+  width: 100%;
+  background-color: #ffb3c6;
+  padding: 10px 0;
+  text-align: center;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+}
+
+header h1 {
+  margin: 0;
+  font-size: 2.2em;
+  color: #d6336c;
+}
+
+.main-container {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-start;
+  width: 100%;
+  max-width: 1200px;
+  margin: 20px 0;
+  padding: 10px;
+  gap: 20px;
+}
+
+.image-container,
+.form-container {
+  flex: 1 1 400px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.image-container img {
+  width: 100%;
+  max-width: 400px;
+  border-radius: 20px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+}
+
+.form-container {
+  background: #fff0f5;
+  padding: 20px;
+  border-radius: 15px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+}
+
+.alarm-block,
+.display-settings-block {
+  background: #ffe6ef;
+  margin-bottom: 15px;
+  padding: 10px;
+  border-radius: 10px;
+  width: 100%;
+}
+
+.display-settings-block {
+  background: #e6f3ff; /* Bläulicher Hintergrund für Unterscheidung */
+}
+
+.alarm-block input[type="time"],
+.alarm-block input[type="text"],
+.display-settings-block input[type="time"],
+.display-settings-block input[type="checkbox"] {
+  width: 40%;
+  padding: 5px;
+  margin: 5px;
+  font-size: 1em;
+}
+
+.checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 5px;
+}
+
+.checkboxes label {
+  margin: 3px 5px;
+  font-size: 0.85em;
+}
+
+#saveButton {
+  margin-top: 20px;
+  padding: 12px 24px;
+  font-size: 1em;
+  background-color: #ff85a2;
+  border: none;
+  border-radius: 10px;
+  color: white;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  width: 100%;
+}
+
+#saveButton:hover {
+  background-color: #ff6389;
+}
+
+#saveButton.loading {
+  background-color: #ffb3c6;
+  cursor: default;
+}
+
+#saveButton.saved {
+  background-color: #5cb85c;
+}
+
+footer {
+  margin-top: 20px;
+  font-size: 0.8em;
+  color: #999;
+  width: 100%;
+  text-align: center;
+}
+
+.debug-link {
+  font-size: 0.7em;
+  color: #ccc;
+  text-decoration: none;
+  position: fixed;
+  bottom: 10px;
+  right: 10px;
+}
+
+.debug-link:hover {
+  color: #999;
+}
+
+/* Responsive Anpassung */
+@media (max-width: 768px) {
+  .main-container {
+    flex-direction: column;
+    align-items: center;
+  }
+  .image-container img {
+    max-width: 300px;
+  }
+}
