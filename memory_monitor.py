@@ -12,6 +12,7 @@ _boot_memory = None   # Speicher direkt nach Boot
 _max_history = 30     # Behalte letzte 30 Messungen
 _low_strikes = 0      # aufeinanderfolgende Low-Memory-Treffer
 _last_emergency_ts = 0
+_last_low_log_ts = 0  # Throttle fuer LOW-Logs
 
 def record_boot_memory():
     """Speichere Speicher direkt nach Boot fuer Vergleich"""
@@ -98,8 +99,15 @@ def monitor_memory(log_path=None, force_gc=False, context=""):
             freed = free_after - free_before
             boot_loss = _boot_memory - free_after if _boot_memory else 0
             
-            log_message(log_path, "[Memory] GC #{}: {}KB frei (+{}), Boot-Verlust: {}KB".format(
-                _gc_counter, free_after//1024, freed, boot_loss//1024))
+            # Weniger Log-Spam: nur loggen bei bedeutender Aenderung oder alle 10 GCs
+            SHOULD_LOG_GC = (
+                force_gc or
+                (_gc_counter % 10 == 0) or
+                (freed >= 8192)  # >= 8KB freigegeben
+            )
+            if SHOULD_LOG_GC:
+                log_message(log_path, "[Memory] GC #{}: {}KB frei (+{}), Boot-Verlust: {}KB".format(
+                    _gc_counter, free_after//1024, freed, boot_loss//1024))
             
             # Analysiere Trend alle 10 GCs
             if _gc_counter % 10 == 0:
@@ -145,11 +153,14 @@ def check_and_cleanup_low_memory(log_path=None, threshold=8192, cooldown_s=300):
     - Loest erst dann Notfall-Cleanup aus, wenn weiterhin zu wenig frei ist und
       seit dem letzten Notfall-Cleanup mindestens cooldown_s vergangen sind.
     """
-    global _low_strikes, _last_emergency_ts
+    global _low_strikes, _last_emergency_ts, _last_low_log_ts
     try:
         import time
         free = gc.mem_free()
         if free >= threshold:
+            # Nur nach anhaltendem Low zunaechst Recovery loggen
+            if _low_strikes >= 2:
+                log_message(log_path, "[Memory LOW] Erholt nach GC: {}KB frei".format(free//1024))
             _low_strikes = 0
             return free
 
@@ -159,7 +170,6 @@ def check_and_cleanup_low_memory(log_path=None, threshold=8192, cooldown_s=300):
             gc.collect()
             free2 = gc.mem_free()
             if free2 >= threshold:
-                log_message(log_path, "[Memory LOW] Erholt nach GC: {}KB frei".format(free2//1024))
                 _low_strikes = 0
                 return free2
             free = free2
@@ -173,8 +183,10 @@ def check_and_cleanup_low_memory(log_path=None, threshold=8192, cooldown_s=300):
             _low_strikes = 0
             return free_after
         else:
-            # Cooldown aktiv: leise zurueckmelden, dass wenig frei ist
-            log_message(log_path, "[Memory LOW] Cooldown aktiv: {}KB frei".format(free//1024))
+            # Cooldown aktiv: nur einmal pro Cooldown-Fenster loggen
+            if (now - _last_low_log_ts) >= cooldown_s:
+                log_message(log_path, "[Memory LOW] Anhaltend (Cooldown aktiv): {}KB frei".format(free//1024))
+                _last_low_log_ts = now
             return free
     except Exception as e:
         log_message(log_path, "[LowMemory Manager Fehler] {}".format(str(e)))
