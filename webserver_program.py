@@ -362,12 +362,18 @@ def handle_website_connection(s, log_path=None):
 
             elif method == "POST" and path == "/toggle_debug":
                 _toggle_debug_mode(cl, log_path)
+                
+            elif method == "POST" and path == "/toggle_leds":
+                _toggle_leds(cl, log_path)
 
             elif path in ("/", "/index.html"):
                 _serve_index_page(cl, log_path)
 
             elif path == "/debug":
                 _serve_debug_file(cl, log_path)
+                
+            elif path == "/logs":
+                _serve_log_file(cl, log_path)
 
             else:
                 # Alle anderen Anfragen über sichere Datei-Serving-Funktion
@@ -544,11 +550,21 @@ def _serve_file_from_sd(cl, file_name, log_path=None):
         log_message(log_path, "📦 Sende sichere Datei: " + clean_filename + location_info)
 
         with open(path, "rb") as f:
+            chunk_count = 0
             while True:
                 chunk = f.read(2048)
                 if not chunk:
                     break
                 cl.sendall(chunk)
+                
+                # Watchdog alle 10 Chunks füttern (verhindert Reset bei großen Dateien)
+                chunk_count += 1
+                if chunk_count % 10 == 0:
+                    try:
+                        from recovery_manager import feed_watchdog
+                        feed_watchdog(log_path)
+                    except:
+                        pass  # Falls Import fehlschlägt, weiterarbeiten
     except Exception as e:
         log_message(log_path, "Fehler beim Senden von " + clean_filename + ": " + str(e))
         try:
@@ -604,6 +620,49 @@ def _serve_debug_file(cl, log_path=None):
             pass
 
 
+def _serve_log_file(cl, log_path=None):
+    """Serviert Log-Datei - immer verfügbar (kein Debug-Modus erforderlich)"""
+    clean_filename, error = sanitize_filename("debug_log.txt", log_path)
+    if not clean_filename:
+        log_message(log_path, "[Security] Log-Dateiname nicht validiert: " + str(error))
+        cl.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n<h1>Zugriff verweigert</h1>")
+        return
+    
+    path = "/sd/" + clean_filename
+    if not file_exists(path):
+        cl.sendall(b"HTTP/1.1 404\r\n\r\n<h1>Log-Datei nicht gefunden</h1>")
+        return
+        
+    try:
+        cl.sendall(b"HTTP/1.1 200 OK\r\nContent-Type:text/html\r\n"
+                  b"X-Content-Type-Options: nosniff\r\n"
+                  b"X-Frame-Options: DENY\r\n\r\n"
+                  b"<html><head><title>Neuza Wecker - Logs</title><style>"
+                  b"body{font-family:monospace;background:#fff0f5;color:#5c1a33;margin:20px;}"
+                  b"pre{background:#ffe6ef;padding:15px;border-radius:10px;overflow-x:auto;}"
+                  b"h2{color:#d6336c;}a{color:#ff85a2;}</style></head>"
+                  b"<body><h2>\xf0\x9f\x93\x8b Neuza Wecker - System Logs</h2><pre>")
+        
+        # Sichere Zeilenweise Ausgabe mit Größenbegrenzung
+        line_count = 0
+        max_lines = 800  # Mehr Zeilen für normalen Log-Viewer
+        
+        with open(path) as f:
+            for line in f:
+                if line_count >= max_lines:
+                    cl.sendall(b"\n--- LOG GEKUERZT (max " + str(max_lines).encode() + b" Zeilen) ---")
+                    break
+                cl.sendall(html_escape(line).encode())
+                line_count += 1
+        
+        cl.sendall(b"</pre><p><a href='/'>\xe2\x86\x90 Zurueck zur Hauptseite</a></p></body></html>")
+        log_message(log_path, "Log-Datei ausgeliefert (" + str(line_count) + " Zeilen).")
+        
+    except Exception as e:
+        log_message(log_path, "Log-Datei Lesefehler: " + str(e))
+        cl.sendall(b"Fehler beim Lesen der Log-Datei")
+
+
 def _toggle_debug_mode(cl, log_path=None):
     """Schaltet Debug-Modus um und gibt Status zurück"""
     try:
@@ -630,6 +689,35 @@ def _toggle_debug_mode(cl, log_path=None):
             cl.sendall(b"HTTP/1.1 500\r\n\r\nInterner Server Fehler")
         except Exception:
             pass
+
+
+def _toggle_leds(cl, log_path=None):
+    """Schaltet LEDs um (Display Toggle Funktion)"""
+    try:
+        # Importiere Funktionen aus clock_program
+        # Da wir nicht direkt auf die Clock-Variablen zugreifen können,
+        # senden wir ein Signal über eine Datei
+        
+        try:
+            # Erstelle Toggle-Signal-Datei
+            with open("/sd/.led_toggle_request", "w") as f:
+                import time
+                f.write("LED toggle request at: {}".format(str(time.localtime())))
+            
+            log_message(log_path, "[LED-Toggle] LED-Umschaltung angefordert")
+            
+            # Rückmeldung an Browser
+            response = "HTTP/1.1 200 OK\r\n\r\nLED Toggle erfolgreich angefordert"
+            cl.sendall(response.encode())
+            
+        except Exception as file_error:
+            log_message(log_path, "[LED-Toggle] Datei-Fehler: " + str(file_error))
+            cl.sendall(b"HTTP/1.1 500\r\n\r\nLED Toggle Dateifehler")
+            
+    except Exception as e:
+        error_msg = "Kritischer Fehler beim LED-Toggle: " + str(e)
+        log_message(log_path, error_msg)
+        cl.sendall("HTTP/1.1 500\r\n\r\nInterner Serverfehler: {}".format(error_msg[:50]).encode())
 
 
 # --------------------------------------------------------------------
@@ -686,45 +774,164 @@ def _load_display_settings():
 #   Index-Seite mit integrierten Display-Einstellungen
 # --------------------------------------------------------------------
 def _serve_index_page(cl, log_path=None):
+    """Memory-optimierte Index-Seite mit chunked streaming und aggressiver GC"""
     try:
-        # Memory Cleanup vor HTML-Rendering
+        # AGGRESSIVE Memory Cleanup vor HTML-Rendering
+        import gc
+        for _ in range(3):  # Mehrere GC-Durchläufe
+            gc.collect()
+        
+        # Memory-Safe: Stream HTML in kleinen Chunks
+        _send_http_header(cl)
+        _send_html_chunks(cl, log_path)
+        
+        # SOFORTIGE Memory-Bereinigung nach Request
+        gc.collect()
+        log_message(log_path, "Index-Seite gestreamt (Memory-Safe).")
+        
+    except Exception as e:
+        try:
+            log_message(log_path, "Fehler beim Erzeugen der Index-Seite: {}".format(str(e)))
+        except:
+            pass  # Falls log_path None ist
+        _send_error_response(cl, 500, "Interner Fehler")
+    finally:
+        # GARANTIERTE Cleanup
         import gc
         gc.collect()
-        
-        # Memory-optimiert: Stream HTML direkt ohne große Strings im RAM
-        cl.sendall(b"HTTP/1.1 200 OK\r\nContent-Type:text/html\r\n\r\n")
-        
-        # HTML Header senden
-        cl.sendall(b"""<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">
+
+
+def _send_http_header(cl):
+    """Sendet HTTP-Header memory-safe"""
+    cl.sendall(b"HTTP/1.1 200 OK\r\nContent-Type:text/html\r\n\r\n")
+
+
+def _send_html_chunks(cl, log_path=None):
+    """Sendet HTML in memory-safe chunks"""
+    import gc
+    
+    # Chunk 1: HTML Header (klein halten!)
+    chunk1 = b"""<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Neuza Wecker</title><link rel="stylesheet" href="styles.css"></head>
 <body><header><h1>Neuza Wecker</h1></header>
 <div class="main-container"><div class="image-container">
 <img src="neuza.webp" alt="Neuza" onerror="this.style.display='none'"></div>
-<div class="form-container"><form id="alarmForm">""")
+<div class="form-container"><form id="alarmForm">"""
+    cl.sendall(chunk1)
+    gc.collect()  # Nach jedem Chunk
+    
+    # Chunk 2: Alarm-Blöcke (Memory-sparend laden)
+    alarme = _load_alarms("/sd/alarm.txt")
+    _send_alarm_blocks_safe(cl, alarme)
+    gc.collect()  # Nach Alarmen
+    
+    # Chunk 3: Display-Settings
+    _send_display_block_safe(cl)
+    gc.collect()  # Nach Display-Block
+    
+    # Chunk 4: Footer und JavaScript (aufgeteilt)
+    _send_footer_chunks(cl, log_path)
+    gc.collect()  # Final cleanup
+
+
+def _send_alarm_blocks_safe(cl, alarme):
+    """Memory-sichere Alarm-Block Übertragung"""
+    import gc
+    all_alarms = alarme + [("", "", [], "")] * (5 - len(alarme))
+    
+    for i, (zeit, text, tage, aktiv) in enumerate(all_alarms):
+        # Alarm-Block einzeln generieren und senden
+        block = _generate_alarm_block(zeit, text, tage, aktiv)
+        cl.sendall(block.encode())
         
-        # Alarme laden und einzeln senden (Memory-sparend)
-        alarme = _load_alarms("/sd/alarm.txt")
-        _send_alarm_blocks(cl, alarme)
-        
-        # Display-Settings senden  
-        _send_display_block(cl)
-        
-        # Footer und JavaScript senden
-        debug_link = ' | <a href="/debug">Debug</a>' if is_debug_mode_enabled() else ''
-        footer_js = '''
-<button id="saveButton" type="button" onclick="saveAllSettings()">Alle Einstellungen speichern</button>
-</form></div></div><footer>Neuza Wecker{}</footer>
-<script>{}</script></body></html>'''.format(debug_link, JS_SNIPPET)
-        
-        cl.sendall(footer_js.encode())
-        log_message(log_path, "Index-Seite gestreamt (Memory-optimiert).")
-    except Exception as e:
-        log_message(log_path, "Fehler beim Erzeugen der Index-Seite: {}".format(str(e)))
-        try:
-            cl.sendall(b"HTTP/1.1 500\r\n\r\nInterner Fehler")
-        except Exception:
-            pass
+        # Memory cleanup alle 2 Blöcke
+        if i % 2 == 1:
+            gc.collect()
+
+
+def _generate_alarm_block(zeit, text, tage, aktiv):
+    """Generiert einzelnen Alarm-Block memory-safe"""
+    chk_days = ""
+    for w in ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]:
+        chk = "checked" if w in tage else ""
+        chk_days += '<label><input type="checkbox" {}> {}</label>\n'.format(chk, w)
+    
+    chk_a = "checked" if aktiv.strip().lower() == "aktiv" else ""
+    
+    return '''<div class="alarm-block">
+<input type="time" value="{}">
+<input type="text" value="{}">
+<div class="checkboxes">
+{}
+<label><input type="checkbox" {}> Aktiv</label>
+</div></div>\n'''.format(
+        zeit, _html_escape(text), chk_days, chk_a)
+
+
+def _send_display_block_safe(cl):
+    """Memory-sichere Display-Settings Übertragung"""
+    settings = _load_display_settings()
+    
+    block = '''<div class="display-settings-block">
+<h3>Display-Einstellungen</h3>
+<label><input type="checkbox" id="displayAuto" {}> Automatisches Ein/Aus</label><br>
+<label>Ein-Zeit: <input type="time" id="displayOn" value="{}"></label><br>
+<label>Aus-Zeit: <input type="time" id="displayOff" value="{}"></label>
+</div>\n'''.format(
+        "checked" if settings.get('auto', True) else "",
+        settings.get('on_time', '06:45'),
+        settings.get('off_time', '20:00')
+    )
+    cl.sendall(block.encode())
+
+
+def _send_footer_chunks(cl, log_path=None):
+    """Memory-sichere Footer und JavaScript Übertragung"""
+    import gc
+    
+    # Footer Teil 1
+    debug_link = ' | <a href="/debug">Debug</a>' if is_debug_mode_enabled() else ''
+    footer1 = '''<button id="saveButton" type="button" onclick="saveAllSettings()">Alle Einstellungen speichern</button>
+</form></div></div><footer>Neuza Wecker{}</footer>\n'''.format(debug_link)
+    cl.sendall(footer1.encode())
+    gc.collect()
+    
+    # JavaScript in kleineren Chunks
+    js_chunks = _split_javascript()
+    for chunk in js_chunks:
+        cl.sendall(chunk.encode())
+        gc.collect()
+    
+    # HTML Ende
+    cl.sendall(b"</body></html>")
+
+
+def _split_javascript():
+    """Teilt JavaScript in memory-safe chunks"""
+    return [
+        "<script>",
+        JS_SNIPPET[:500],  # Erste 500 Zeichen
+        JS_SNIPPET[500:1000] if len(JS_SNIPPET) > 500 else "",  # Nächste 500
+        JS_SNIPPET[1000:] if len(JS_SNIPPET) > 1000 else "",  # Rest
+        "</script>"
+    ]
+
+
+def _html_escape(text):
+    """Einfache HTML-Escape Funktion"""
+    if not text:
+        return ""
+    return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+
+
+def _send_error_response(cl, code, message):
+    """Memory-sichere Error Response"""
+    try:
+        response = "HTTP/1.1 {} {}\r\n\r\n{}".format(code, message, message)
+        cl.sendall(response.encode())
+    except Exception:
+        pass  # Fehler beim Fehler-senden ignorieren
 
 
 def _send_alarm_blocks(cl, alarme):
@@ -748,7 +955,7 @@ def _send_alarm_blocks(cl, alarme):
 {}
 <label><input type="checkbox" {}> Aktiv</label>
 </div></div>
-'''.format(zeit, html_escape(text), chk_days, chk_a)
+'''.format(zeit, _html_escape(text), chk_days, chk_a)
         
         cl.sendall(block_html.encode())
 
@@ -805,18 +1012,21 @@ def _render_index(alarme):
     display_settings = _load_display_settings()
     auto_checked = 'checked' if display_settings.get('DISPLAY_AUTO', 'true') == 'true' else ''
     
-    # Display-Block hinzufügen
+    # Display-Block mit LED-Toggle hinzufügen
     display_block = '''<div class="alarm-block">
 <h3>Display Automatik</h3>
 <label><input type="checkbox" id="displayAuto" {}> Automatisch Ein/Aus</label><br>
 <label>Display An: <input type="time" id="displayOn" value="{}"></label><br>
-<label>Display Aus: <input type="time" id="displayOff" value="{}"></label>
+<label>Display Aus: <input type="time" id="displayOff" value="{}"></label><br>
+<button type="button" class="led-toggle-btn" onclick="toggleLEDs()">💡 LEDs Ein/Aus</button>
 </div>'''.format(auto_checked, display_settings.get('DISPLAY_ON_TIME', '07:00'), display_settings.get('DISPLAY_OFF_TIME', '22:00'))
 
-    # Debug-Link nur anzeigen wenn Debug-Modus aktiviert ist
+    # Log-Viewer immer verfügbar + Debug-Link nur wenn aktiviert
+    log_link = ' | <a href="/logs" class="log-link">📋 Logs anzeigen</a>'
     debug_link = ' | <a href="/debug" class="debug-link">Debug-Modus</a>' if is_debug_mode_enabled() else ''
+    all_links = log_link + debug_link
     
-    return INDEX_TEMPLATE.format(rows, display_block, JS_SNIPPET, debug_link)
+    return INDEX_TEMPLATE.format(rows, display_block, JS_SNIPPET, all_links)
 
 
 INDEX_TEMPLATE = """<!DOCTYPE html>
@@ -870,6 +1080,23 @@ ok2=r2.ok;console.log('Display:',r2.status);}}catch(e){console.error('Display-Fe
 b.textContent=ok1&&ok2?'Alles gespeichert ✅':'Fehler beim Speichern';
 console.log('Ergebnis: Alarme='+ok1+', Display='+ok2);
 setTimeout(()=>{b.disabled=false;b.textContent='Alle Einstellungen speichern';},3000);
+}
+
+async function toggleLEDs(){
+const btn=event.target;
+if(!btn)return;
+btn.disabled=true;
+btn.textContent='💡 Schalte...';
+try{
+const r=await fetch('/toggle_leds',{method:'POST'});
+const success=r.ok;
+btn.textContent=success?'💡 LEDs umgeschaltet ✅':'💡 Fehler beim Schalten';
+setTimeout(()=>{btn.disabled=false;btn.textContent='💡 LEDs Ein/Aus';},2000);
+}catch(e){
+console.error('LED-Toggle Fehler:',e);
+btn.textContent='💡 Verbindungsfehler';
+setTimeout(()=>{btn.disabled=false;btn.textContent='💡 LEDs Ein/Aus';},2000);
+}
 }"""
 
 

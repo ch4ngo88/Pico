@@ -172,42 +172,63 @@ def read_cpu_temperature():
 
 
 def get_sd_card_free_space(path="/sd"):
+    """Memory-sichere SD-Karten Speicherabfrage mit begrenzter Diagnostik"""
     try:
         if "sd" not in os.listdir("/") or not hasattr(os, "statvfs"):
             return None
         stats = os.statvfs(path)
         
-        # ERWEITERTE SD-DIAGNOSE!  
-        if log_path_global:
-            debug_msg = "SD-DEBUG: f_bsize={} f_frsize={} f_blocks={} f_bavail={}".format(
-                stats[0], stats[1], stats[2], stats[3])
-            log_message(log_path_global, debug_msg)
-            
-            total_bytes = stats[2] * stats[1] 
-            free_bytes = stats[3] * stats[1]
-            total_mb = total_bytes / (1024**2)
-            free_mb = free_bytes / (1024**2)
-            
-            log_message(log_path_global, "SD-CALC: {:.1f}MB total, {:.1f}MB frei".format(total_mb, free_mb))
-            log_message(log_path_global, "SD-RAW: {} bytes total, {} bytes frei".format(total_bytes, free_bytes))
-            
-            # Prüfe SD-Verzeichnis Inhalt
-            try:
-                sd_files = os.listdir("/sd")
-                log_message(log_path_global, "SD-Inhalt: {} Dateien/Ordner".format(len(sd_files)))
-                for f in sd_files[:10]:  # Nur erste 10 zeigen
-                    try:
-                        stat = os.stat("/sd/{}".format(f))
-                        log_message(log_path_global, "SD-Datei: {} ({} bytes)".format(f, stat[6]))
-                    except:
-                        log_message(log_path_global, "SD-Datei: {} (stat failed)".format(f))
-            except Exception as e:
-                log_message(log_path_global, "SD-Listing Fehler: {}".format(str(e)))
+        # BEGRENZTE SD-DIAGNOSE (nur einmal pro Stunde)
+        _log_sd_diagnostics_limited(stats, path)
         
+        # Einfache Berechnung ohne Memory-intensive Debug-Ausgaben
         return stats[3] * stats[1] / (1024**2)
+        
     except Exception as e:
         log_message(log_path_global, "[SD Speicher Fehler] {}".format(str(e)))
         return None
+
+# Globale Variablen für SD-Diagnostics-Throttling
+_last_sd_diag_time = 0
+_sd_diag_interval = 3600  # 1 Stunde
+
+def _log_sd_diagnostics_limited(stats, path):
+    """Begrenzte SD-Diagnostics um Memory-Leaks zu verhindern"""
+    global _last_sd_diag_time
+    import time
+    
+    current_time = time.time()
+    
+    # Nur einmal pro Stunde detaillierte Diagnostics
+    if current_time - _last_sd_diag_time < _sd_diag_interval:
+        return
+    
+    _last_sd_diag_time = current_time
+    
+    try:
+        if not log_path_global:
+            return
+            
+        # Kompakte Diagnostics ohne Memory-intensive Schleifen
+        total_bytes = stats[2] * stats[1] 
+        free_bytes = stats[3] * stats[1]
+        total_mb = total_bytes / (1024**2)
+        free_mb = free_bytes / (1024**2)
+        
+        # EINE kompakte Log-Nachricht statt vieler
+        diag_msg = "SD-Status: {:.1f}MB frei von {:.1f}MB total".format(free_mb, total_mb)
+        log_message(log_path_global, diag_msg)
+        
+        # Datei-Count ohne Detail-Listing (verhindert Memory-Leak)
+        try:
+            sd_files = os.listdir(path)
+            file_count = len(sd_files)
+            log_message(log_path_global, "SD-Dateien: {} Stück".format(file_count))
+        except Exception as e:
+            log_message(log_path_global, "SD-Listing Fehler: {}".format(str(e)))
+            
+    except Exception as e:
+        log_message(log_path_global, "[SD Diagnostics Fehler] {}".format(str(e)))
 
 
 def clear_joystick_buffer():
@@ -320,83 +341,153 @@ def check_alarm(hour, minute, aktueller_tag, weckzeiten, weckstatus, log_path):
 
 
 def alarm_ausloesen(np, lcd, volume, text, idx=None, log_path=None):
+    """Memory-sichere Alarm-Funktion mit guaranteed cleanup"""
+    
+    # MEMORY-SAFE: Lokale Variablen minimieren
     sc.alarm_flag = True
     start_time = utime.time()
-
-    # ---------- Display ----------
-    if lcd:
-        lcd.clear()
-        if len(text) <= 16:
-            lcd.move_to((16 - len(text)) // 2, 0)
-            lcd.putstr(text)
-        elif len(text) <= 32:
-            lcd.move_to((16 - len(text[:16])) // 2, 0)
-            lcd.putstr(text[:16])
-            lcd.move_to((16 - len(text[16:])) // 2, 1)
-            lcd.putstr(text[16:])
-        else:
-            lcd.move_to(0, 0)
-            lcd.putstr(text[:16])
-            lcd.move_to(0, 1)
-            lcd.putstr(text[16:32])
-
-    # ---------- Licht + Ton ----------
-    melody = [
-        (330, 1000),
-        (415, 1000),
-        (370, 1000),
-        (247, 1000),
-        (0, 500),
-        (330, 1000),
-        (370, 1000),
-        (415, 1000),
-        (330, 1000),
-    ]
-
+    cleanup_done = False
+    
     def log_alarm_stopped_manually():
         if log_path is not None and idx is not None:
             log_alarm_event(log_path, "Alarm manuell beendet - Index {}, Text: {}".format(idx, text))
 
-    while sc.alarm_flag and utime.time() - start_time < 900:
-        for _ in range(5):
-            for rgb in [(255, 0, 0), (0, 0, 0)]:
-                if np:
-                    try:
-                        np.fill(*rgb)
-                    except TypeError:
-                        np.fill(rgb)
+    def emergency_cleanup():
+        """Garantierte Aufräumung bei Alarm-Ende"""
+        nonlocal cleanup_done
+        if cleanup_done:
+            return
+            
+        try:
+            # Display zurücksetzen
+            if lcd:
+                lcd.clear()
+            
+            # LEDs zurücksetzen
+            if np:
+                try:
+                    np.fill(0, 0, 0)
                     np.show()
+                except:
+                    pass
+            
+            # Zeit/LEDs aktualisieren 
+            try:
+                hour, minute, *_ = aktualisiere_zeit()
+                update_leds_based_on_time(np, hour, minute)
+            except:
+                pass
+                
+            # Joystick-Buffer leeren
+            clear_joystick_buffer()
+            
+            # Memory cleanup
+            import gc
+            gc.collect()
+            
+            cleanup_done = True
+        except Exception as e:
+            log_message(log_path, "[Alarm-Cleanup Fehler] {}".format(str(e)))
 
-                t0 = utime.ticks_ms()
-                while utime.ticks_diff(utime.ticks_ms(), t0) < 300:
-                    if not sc.alarm_flag:
-                        break
-                    if get_joystick_direction():
-                        sc.alarm_flag = False
-                        log_alarm_stopped_manually()
-                        break
-                    utime.sleep_ms(10)
-            if not sc.alarm_flag:
-                break
-
-        for note, dur in melody:
-            sc.play_note(note, dur, volume)
-            if not sc.alarm_flag:
-                break
+    try:
+        # ---------- Display Setup (Memory-safe) ----------
+        _setup_alarm_display(lcd, text)
+        
+        # ---------- SIMPLIFIED ALARM LOOP (Memory-safe) ----------
+        melody_notes = [(330, 1000), (415, 1000), (370, 1000), (247, 1000), (0, 500),
+                       (330, 1000), (370, 1000), (415, 1000), (330, 1000)]
+        
+        led_cycle = 0
+        melody_index = 0
+        last_led_time = utime.ticks_ms()
+        last_sound_time = utime.ticks_ms()
+        
+        # SINGLE LOOP statt nested loops - verhindert Memory-Leaks!
+        loop_iterations = 0
+        while sc.alarm_flag and (utime.time() - start_time) < 900:
+            current_time = utime.ticks_ms()
+            
+            # Watchdog-Fütterung alle 100 Loop-Iterationen (verhindert Reset-Loops)
+            loop_iterations += 1
+            if loop_iterations % 100 == 0:
+                feed_watchdog(log_path)
+            
+            # LED-Blinking (alle 300ms)
+            if utime.ticks_diff(current_time, last_led_time) >= 300:
+                _handle_alarm_leds(np, led_cycle)
+                led_cycle = (led_cycle + 1) % 2
+                last_led_time = current_time
+            
+            # Sound-Handling (nach Melodie-Timing)
+            if melody_index < len(melody_notes) and utime.ticks_diff(current_time, last_sound_time) >= melody_notes[melody_index][1]:
+                note, duration = melody_notes[melody_index]
+                sc.play_note(note, duration, volume)
+                melody_index = (melody_index + 1) % len(melody_notes)
+                last_sound_time = current_time
+            
+            # KRITISCH: Joystick-Check mit sofortigem Exit
             if get_joystick_direction():
                 sc.alarm_flag = False
                 log_alarm_stopped_manually()
-                break
+                feed_watchdog(log_path)  # Final watchdog feed vor Exit
+                break  # SOFORTIGER EXIT verhindert Memory-Leak!
+            
+            # Short sleep to prevent CPU overload
+            utime.sleep_ms(10)
+            
+    except Exception as e:
+        log_message(log_path, "[Alarm Fehler] {}".format(str(e)))
+    finally:
+        # GARANTIERTE Aufräumung - egal was passiert!
+        emergency_cleanup()
 
-    # ---------- Aufräumen ----------
-    if lcd:
+
+def _setup_alarm_display(lcd, text):
+    """Memory-sichere Display-Konfiguration für Alarm"""
+    if not lcd or not text:
+        return
+        
+    try:
         lcd.clear()
+        text_len = len(text)
+        
+        if text_len <= 16:
+            # Zentriert auf erster Zeile
+            lcd.move_to(max(0, (16 - text_len) // 2), 0)
+            lcd.putstr(text)
+        elif text_len <= 32:
+            # Auf zwei Zeilen aufteilen
+            line1 = text[:16]
+            line2 = text[16:]
+            lcd.move_to(max(0, (16 - len(line1)) // 2), 0)
+            lcd.putstr(line1)
+            lcd.move_to(max(0, (16 - len(line2)) // 2), 1)
+            lcd.putstr(line2)
+        else:
+            # Lange Texte abschneiden
+            lcd.move_to(0, 0)
+            lcd.putstr(text[:16])
+            lcd.move_to(0, 1)
+            lcd.putstr(text[16:32])
+    except Exception as e:
+        log_message(log_path_global, "[Alarm Display Fehler] {}".format(str(e)))
 
-    hour, minute, *_ = aktualisiere_zeit()
-    update_leds_based_on_time(np, hour, minute)
-    clear_joystick_buffer()
-    
-    # ---------- Aufräumen ----------
+
+def _handle_alarm_leds(np, cycle):
+    """Memory-sichere LED-Behandlung für Alarm"""
+    if not np:
+        return
+        
+    try:
+        if cycle == 0:
+            # Rot
+            np.fill(255, 0, 0)
+        else:
+            # Aus
+            np.fill(0, 0, 0)
+        np.show()
+    except Exception as e:
+        log_message(log_path_global, "[Alarm LEDs Fehler] {}".format(str(e)))
     
     
 def toggle_led_status(np, lcd, status, hour, minute, led=None, blue_led=None):
@@ -825,11 +916,18 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                 if current_time % 30 == 0:  # System-Health Check alle 30 Sekunden
                     check_system_health(log_path)
                     
-                    # Memory-Check alle 5 Minuten
-                    if current_time % 300 == 0:
+                    # Memory-Check alle 3 Minuten (optimiert von 5 Min)
+                    if current_time % 180 == 0:
+                        feed_watchdog(log_path)  # Watchdog vor Memory-Ops füttern
                         free_mem = monitor_memory(log_path)
-                        if free_mem < 5120:  # Weniger als 5KB
+                        if free_mem < 8192:  # Weniger als 8KB (optimiert von 5KB)
+                            feed_watchdog(log_path)  # Watchdog vor Emergency-Cleanup
                             emergency_cleanup(log_path)
+                            feed_watchdog(log_path)  # Watchdog nach Emergency-Cleanup
+                
+                # LED-Toggle Web-Signal prüfen (alle 5 Sekunden)
+                if current_time % 5 == 0:
+                    _check_led_toggle_signal(np, lcd, led, blue_led, log_path)
                             
             except Exception as e:
                 log_message(log_path, "[System Check Fehler] {}".format(str(e)))
@@ -849,3 +947,35 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
             log_message(log_path, "[Cleanup] Webserver-Stop Fehler: {}".format(str(e)))
         
         log_message(log_path, "[System] Cleanup abgeschlossen.", force=True)
+
+
+def _check_led_toggle_signal(np, lcd, led, blue_led, log_path):
+    """Prüft auf LED-Toggle-Signal vom Webserver"""
+    global leds_auto_update, last_menu_exit_time
+    
+    try:
+        # Prüfe ob Toggle-Signal-Datei existiert
+        try:
+            with open("/sd/.led_toggle_request", "r"):
+                pass  # Datei existiert
+        except OSError:
+            return  # Datei existiert nicht
+            try:
+                # Lösche Signal-Datei
+                os.remove("/sd/.led_toggle_request")
+                
+                # Führe LED-Toggle aus
+                current_time = time.time()
+                if (current_time - last_menu_exit_time) > 1.0:  # Sicherheitsabstand
+                    leds_auto_update = not leds_auto_update
+                    hour, minute, *_ = aktualisiere_zeit(log_path)
+                    toggle_led_status(np, lcd, leds_auto_update, hour, minute, led, blue_led)
+                    log_message(log_path, "[Web-LED-Toggle] LEDs umgeschaltet: {}".format("AN" if leds_auto_update else "AUS"))
+                else:
+                    log_message(log_path, "[Web-LED-Toggle] Zu früh nach Menü - ignoriert")
+                    
+            except Exception as remove_error:
+                log_message(log_path, "[Web-LED-Toggle] Signal-Datei-Fehler: {}".format(str(remove_error)))
+                
+    except Exception as e:
+        log_message(log_path, "[Web-LED-Toggle] Prüfung fehlgeschlagen: {}".format(str(e)))

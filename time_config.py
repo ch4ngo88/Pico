@@ -7,6 +7,9 @@ from log_utils import log_message
 # -------- RTC-Instanz -------------------------------------------------
 rtc = RTC(sda_pin=20, scl_pin=21)  # Pins ggf. anpassen
 
+# Fallback für RTC-Ausfälle (verhindert Zeitsprünge auf 2000)
+_last_good_time = None
+
 
 # ---------------------------------------------------------------------
 #   Zeit lesen
@@ -36,6 +39,11 @@ def aktualisiere_zeit(log_path=None):
                 raise ValueError("Invalid time values: {}:{}:{}".format(hour, minute, second))
                 
             aktueller_tag = weekday - 1  # 0=So … 6=Sa
+            
+            # Speichere als letzte gute Zeit (verhindert 2000er-Zeitsprünge)
+            global _last_good_time
+            _last_good_time = (hour, minute, second, aktueller_tag, day, month, year)
+            
             return hour, minute, second, aktueller_tag, day, month, year
 
         except Exception as e:
@@ -43,8 +51,15 @@ def aktualisiere_zeit(log_path=None):
                 log_message(log_path, "RTC-Fehler nach 3 Versuchen: %s" % e)
             time.sleep(0.05)  # Kurze Pause zwischen Versuchen
     
-    # Fallback: Letzte bekannte gute Zeit oder Default
-    return 0, 0, 0, 0, 1, 1, 2000
+    # Fallback: Letzte bekannte gute Zeit oder sinnvoller Default
+    global _last_good_time
+    if _last_good_time:
+        log_message(log_path, "[RTC-Fallback] Verwende letzte gute Zeit")
+        return _last_good_time
+    else:
+        # Erstes Boot - verwende aktuelles Jahr statt 2000
+        log_message(log_path, "[RTC-Fallback] Erstboot - verwende 2025")
+        return 12, 0, 0, 1, 30, 9, 2025  # 30.9.2025 12:00 (Montag)
 
 
 # ---------------------------------------------------------------------
@@ -112,17 +127,26 @@ def synchronisiere_zeit(log_path=None):
 
     except Exception as e:
         log_message(log_path, "NTP fehlgeschlagen: %s" % e)
-        log_message(log_path, "NTP fehlgeschlagen, RTC-Zeit wird weiterverwendet: {}".format(rtc.read_time()))
-        # ---- Fallback: RTC → System-Uhr ----
+        
+        # ---- Robuster Fallback: RTC → System-Uhr ----
         try:
-            tup = rtc.read_time()
-            if tup is None:
-                raise ValueError("RTC read returned None")
-            sec, minute, hour, weekday, day, month, year = tup
+            # Nutze die robuste aktualisiere_zeit Funktion statt direktes RTC-Read
+            hour, minute, second, aktueller_tag, day, month, year = aktualisiere_zeit(log_path)
+            
+            # Plausibilitätsprüfung - verhindert Zeitsprünge
+            if year < 2020:  # Verhindert Fallback auf 2000 oder andere ungültige Jahre
+                log_message(log_path, "RTC-Jahr {} unplausibel, behalte aktuelle Zeit", year)
+                return False
+                
+            weekday = (aktueller_tag + 1) % 7 + 1  # Konvertiere zu DS3231-Format
+            
+            log_message(log_path, "NTP-Fallback: RTC-Zeit {}:{:02d} {}.{}.{} verwendet".format(
+                hour, minute, day, month, year))
+            
             machine.RTC().datetime(
-                (year, month, day, weekday % 7, hour, minute, sec, 0)
+                (year, month, day, weekday % 7, hour, minute, second, 0)
             )
-            log_message(log_path, "Systemzeit auf RTC gesetzt.")
+            log_message(log_path, "Systemzeit auf plausible RTC-Zeit gesetzt.")
         except Exception as e2:
-            log_message(log_path, "Fehler beim Lesen der RTC: %s" % e2)
+            log_message(log_path, "Fehler beim RTC-Fallback: %s" % e2)
         return False

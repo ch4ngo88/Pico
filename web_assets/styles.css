@@ -139,6 +139,39 @@ footer {
   color: #999;
 }
 
+.log-link {
+  font-size: 0.8em;
+  color: #ff85a2;
+  text-decoration: none;
+  margin: 0 5px;
+}
+
+.log-link:hover {
+  color: #ff6389;
+}
+
+.led-toggle-btn {
+  margin-top: 10px;
+  padding: 8px 16px;
+  font-size: 0.9em;
+  background-color: #ff85a2;
+  border: none;
+  border-radius: 8px;
+  color: white;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  width: 100%;
+}
+
+.led-toggle-btn:hover {
+  background-color: #ff6389;
+}
+
+.led-toggle-btn:disabled {
+  background-color: #ffb3c6;
+  cursor: default;
+}
+
 /* Responsive Anpassung */
 @media (max-width: 768px) {
   .main-container {

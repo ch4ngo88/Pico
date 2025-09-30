@@ -19,8 +19,8 @@ def monitor_memory(log_path=None, force_gc=False):
         import time
         now = time.time()
         
-        # Automatische GC alle 5 Minuten oder bei Bedarf
-        if force_gc or (now - _last_gc_time > 300):
+        # Automatische GC alle 3 Minuten oder bei Bedarf (optimiert von 5 Min)
+        if force_gc or (now - _last_gc_time > 180):
             free_before = gc.mem_free()
             gc.collect()
             free_after = gc.mem_free()
@@ -33,7 +33,7 @@ def monitor_memory(log_path=None, force_gc=False):
                 log_message(log_path, "[Memory] GC #{}: {} bytes frei (+{})".format(_gc_counter, free_after, freed))
             
             # Warnung bei niedrigem Speicher
-            if free_after < 10240:  # Weniger als 10KB
+            if free_after < 12288:  # Weniger als 12KB (optimiert von 10KB)
                 log_message(log_path, "[Memory WARNING] Nur noch {} bytes frei!".format(free_after), force=True)
                 
         return gc.mem_free()
@@ -49,10 +49,10 @@ def emergency_cleanup(log_path=None):
         import time
         log_message(log_path, "[Memory] Notfall-Cleanup gestartet", force=True)
         
-        # Mehrere GC-Durchläufe
-        for i in range(5):
+        # Optimierte GC-Durchläufe (weniger Zyklen, mehr Zeit)
+        for i in range(3):
             gc.collect()
-            time.sleep(0.1)
+            time.sleep(0.2)  # Längerer Sleep für bessere GC-Effizienz
         
         free_mem = gc.mem_free()
         log_message(log_path, "[Memory] Notfall-Cleanup beendet: {} bytes frei".format(free_mem), force=True)
