@@ -21,7 +21,7 @@ def _timestamp():
 
 
 def _rotate(log_path):
-    """Benamst alte Datei zu .1, wenn sie zu groß wird."""
+    """Benamst alte Datei zu .1, wenn sie zu gross wird."""
     try:
         if os.stat(log_path)[6] > _MAX_SIZE:
             old = log_path + ".1"
@@ -39,7 +39,7 @@ def _rotate(log_path):
 def init_logfile(sd_path="/sd", log_filename=_LOG_NAME):
     """
     Erstellt Log-Verzeichnis und -Datei bei Bedarf.
-    Gibt den vollständigen Pfad zurück oder None, wenn Schreibfehler.
+    Gibt den vollstaendigen Pfad zurueck oder None, wenn Schreibfehler.
     """
     try:
         # SD-Ordner existiert evtl. noch nicht
@@ -57,17 +57,17 @@ def init_logfile(sd_path="/sd", log_filename=_LOG_NAME):
         return None
 
 
-# Anti-Spam: Wiederholte Nachrichten unterdrücken
+# Anti-Spam: Wiederholte Nachrichten unterdruecken
 _last_messages = {}
 _MAX_REPEAT_INTERVAL = 3600  # 1 Stunde zwischen gleichen Nachrichten
 
-# Kategorien für intelligenteres Logging
+# Kategorien fuer intelligenteres Logging
 LOG_CATEGORIES = {
     'STARTUP': True,    # System-Start, wichtige Initialisierung
     'ERROR': True,      # Alle Fehler
     'ALARM': True,      # Alarm-Events
-    'CONFIG': True,     # Konfiguration geändert
-    'STATUS': False,    # Regelmäßige Status-Updates (meist spam)
+    'CONFIG': True,     # Konfiguration geaendert
+    'STATUS': False,    # Regelmaessige Status-Updates (meist spam)
     'DEBUG': False,     # Debug-Informationen
     'WEBSERVER': False, # Normale Web-Requests
     'SYSTEM': False     # Routine System-Checks
@@ -79,7 +79,7 @@ def log_message(log_path, message, force=False, category=None):
     Schreibt Nachricht in Logfile oder (Fallback) auf die Konsole.
     Rotiert Datei automatisch, flush + sync nach jedem Write.
     Anti-Spam: Gleiche Nachrichten nur alle 60 Min.
-    category: Optional für intelligente Filterung
+    category: Optional fuer intelligente Filterung
     """
     global _last_messages
     
@@ -88,12 +88,12 @@ def log_message(log_path, message, force=False, category=None):
         if category in LOG_CATEGORIES and not LOG_CATEGORIES[category]:
             return  # Diese Kategorie ist deaktiviert
     
-    # Anti-Spam Check (außer bei force=True)
+    # Anti-Spam Check (ausser bei force=True)
     if not force:
         now = time.time()
         if message in _last_messages:
             if now - _last_messages[message] < _MAX_REPEAT_INTERVAL:
-                return  # Nachricht unterdrückt
+                return  # Nachricht unterdrueckt
         _last_messages[message] = now
         
         # Cache begrenzen (nur letzte 20 Nachrichten merken)
@@ -116,9 +116,6 @@ def log_message(log_path, message, force=False, category=None):
         except Exception as e:
             print("⚠️  Schreiben in Logdatei fehlgeschlagen:", e)
 
-    else:
-        print("⚠️  log_message() ohne log_path aufgerufen!")
-
     # --- Fallback Konsole ---
     print(full)
 
@@ -127,7 +124,7 @@ def log_message(log_path, message, force=False, category=None):
 #   Convenience-Wrapper
 # --------------------------------------------------------------------
 def error(log_path, context, err):
-    """Einheitliche Fehler-Zeile in except-Blöcken."""
+    """Einheitliche Fehler-Zeile in except-Bloecken."""
     log_message(log_path, "[{}] {}".format(context, str(err)))
 
 
@@ -152,20 +149,20 @@ def log_once_per_day(log_path, message, day):
 
 
 def log_startup(log_path, message):
-    """Für System-Start relevante Logs"""
+    """Fuer System-Start relevante Logs"""
     log_message(log_path, "[STARTUP] {}".format(message), force=True, category='STARTUP')
 
 
 def log_config_change(log_path, message):
-    """Für Konfigurationsänderungen"""
+    """Fuer Konfigurationsaenderungen"""
     log_message(log_path, "[CONFIG] {}".format(message), force=True, category='CONFIG')
 
 
 def log_system_status(log_path, message):
-    """Für regelmäßige System-Status (gefiltert)"""
+    """Fuer regelmaessige System-Status (gefiltert)"""
     log_message(log_path, "[STATUS] {}".format(message), category='STATUS')
 
 
 def log_alarm_event(log_path, message):
-    """Für Alarm-relevante Events (immer loggen)"""
+    """Fuer Alarm-relevante Events (immer loggen)"""
     log_message(log_path, "[ALARM] {}".format(message), force=True, category='ALARM')

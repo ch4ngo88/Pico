@@ -6,7 +6,7 @@ import rp2
 
 
 # --------------------------------------------------------------------
-#   PIO-Programm  (unverändert)
+#   PIO-Programm  (unveraendert)
 # --------------------------------------------------------------------
 @rp2.asm_pio(
     sideset_init=rp2.PIO.OUT_LOW,
@@ -30,7 +30,7 @@ def ws2812():
 #   NeoPixel-Klasse
 # --------------------------------------------------------------------
 class myNeopixel:
-    """Minimaler NeoPixel-Ring-Wrapper für RP2040-PIO."""
+    """Minimaler NeoPixel-Ring-Wrapper fuer RP2040-PIO."""
 
     def __init__(self, num_leds, pin, delay_ms=0):
         self.num_leds = num_leds

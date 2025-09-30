@@ -3,6 +3,7 @@ from machine import PWM, Pin
 import utime
 from joystick import get_joystick_direction
 from log_utils import log_message
+from recovery_manager import feed_watchdog
 
 # --------------------------------------------------------------------
 #   Hardware-Setup
@@ -21,7 +22,7 @@ _MAX_FREQ = 5000
 
 
 def _set_freq(freq):
-    """Frequenz nur updaten, wenn sie sich ändert."""
+    """Frequenz nur updaten, wenn sie sich aendert."""
     global _last_freq
     if freq != _last_freq:
         _speaker.freq(freq)
@@ -38,17 +39,32 @@ def _ramp_duty(target, step=512):
     for d in rng:
         _speaker.duty_u16(d)
         utime.sleep_us(200)
+def _feed(log_path=None):
+    try:
+        feed_watchdog(log_path)
+    except Exception:
+        pass
+
+def _sleep_with_feed(duration_ms, log_path=None):
+    # Schlaf in kleinen Stuecken mit WDT-Fuetterung
+    remaining = int(duration_ms)
+    while remaining > 0:
+        chunk = 100 if remaining > 100 else remaining
+        utime.sleep_ms(chunk)
+        _feed(log_path)
+        remaining -= chunk
+
 
 
 # --------------------------------------------------------------------
 #   Public API
 # --------------------------------------------------------------------
 def play_note(freq, duration_ms, volume_percent, log_path=None):
-    """Sinus-ähnlicher Einzelton mit Ein/Aus-Rampe + Bruch-Abbruch."""
+    """Sinus-aehnlicher Einzelton mit Ein/Aus-Rampe + Bruch-Abbruch."""
     global alarm_flag
     if freq == 0 or not alarm_flag:
         _speaker.duty_u16(0)
-        utime.sleep_ms(duration_ms)
+        _sleep_with_feed(duration_ms, log_path)
         return
 
     try:
@@ -59,11 +75,17 @@ def play_note(freq, duration_ms, volume_percent, log_path=None):
         _ramp_duty(duty)  # fade-in
 
         t_end = utime.ticks_add(utime.ticks_ms(), duration_ms)
+        last_feed = utime.ticks_ms()
         while alarm_flag and utime.ticks_diff(t_end, utime.ticks_ms()) > 0:
             if get_joystick_direction():  # Sofort-Abbruch
                 alarm_flag = False
                 break
             utime.sleep_ms(4)
+            # Alle ~50ms Watchdog fuettern
+            now = utime.ticks_ms()
+            if utime.ticks_diff(now, last_feed) >= 50:
+                _feed(log_path)
+                last_feed = now
 
         _ramp_duty(0)  # fade-out
     except Exception as e:
@@ -76,14 +98,14 @@ def buzz(freq, duration_ms, volume_percent, log_path=None):
     try:
         if freq == 0:
             _speaker.duty_u16(0)
-            utime.sleep_ms(duration_ms)
+            _sleep_with_feed(duration_ms, log_path)
             return
 
         freq = max(_MIN_FREQ, min(freq, _MAX_FREQ))
         _set_freq(freq)
         duty = int(volume_percent * 65535 // 100)
         _speaker.duty_u16(duty)
-        utime.sleep_ms(duration_ms)
+        _sleep_with_feed(duration_ms, log_path)
     except Exception as e:
         log_message(log_path, "[Sound Fehler] buzz(): {}".format(str(e)))
     finally:
@@ -146,13 +168,13 @@ def xp_start_sound(volume_percent, log_path=None):
 
 
 def tempr(volume_percent, log_path=None):
-    # umfangreiches Noten-Array – unverändert übernommen
+    # umfangreiches Noten-Array – unveraendert uebernommen
 
     # Verwendet:
     NOTE_G4, NOTE_C4, NOTE_DS4, NOTE_F4 = 392, 261, 311, 349
     NOTE_E4, NOTE_D4, NOTE_AS3 = 329, 294, 233
 
-    # Nicht verwendet – auskommentiert für Ruff:
+    # Nicht verwendet – auskommentiert fuer Ruff:
     # NOTE_C5 = 523
     # NOTE_AS4 = 466
     # NOTE_G5 = 784

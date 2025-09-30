@@ -57,7 +57,7 @@ class LcdApi:
     #   High-Level API
     # -----------------------------------------------------------------
     def clear(self):
-        """Clear display + Cursor Home (1 Befehl genügt)."""
+        """Clear display + Cursor Home (1 Befehl genuegt)."""
         self.hal_write_command(self.LCD_CLR)  # 4.1 ms delay in HAL
         self.cursor_x = 0
         self.cursor_y = 0
@@ -145,7 +145,7 @@ class LcdApi:
             # Fehler weiterwerfen, damit Caller loggen kann
             raise e
         finally:
-            # Cursor zurück
+            # Cursor zurueck
             self.move_to(self.cursor_x, self.cursor_y)
 
     # -----------------------------------------------------------------

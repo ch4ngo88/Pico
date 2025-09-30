@@ -11,8 +11,16 @@ from log_utils import log_message
 reload_alarms_callback = None
 blue_led = Pin(13, Pin.OUT)
 
-# Race Condition Schutz für gleichzeitiges Speichern
+# Race Condition Schutz fuer gleichzeitiges Speichern
 _save_lock = False  # Einfache Sperre ohne Threading-Library
+
+# Best-effort Watchdog-Feed
+def _feed_wdt(log_path=None):
+    try:
+        from recovery_manager import feed_watchdog
+        feed_watchdog(log_path)
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------
@@ -70,7 +78,7 @@ def stop_webserver(s, log_path=None):
     """Stoppt den Webserver mit garantierter Ressourcen-Freigabe"""
     cleanup_errors = []
     
-    # Socket schließen
+    # Socket schliessen
     if s:
         try:
             s.close()
@@ -83,11 +91,11 @@ def stop_webserver(s, log_path=None):
     except Exception as e:
         cleanup_errors.append("LED: " + str(e))
     
-    # Poller aufräumen (falls registriert)
+    # Poller aufraeumen (falls registriert)
     try:
         _poller.unregister(s)
     except Exception:
-        # Ignorieren - war möglicherweise nicht registriert
+        # Ignorieren - war moeglicherweise nicht registriert
         pass
     
     if cleanup_errors:
@@ -103,6 +111,8 @@ def set_reload_alarms_callback(func):
     global reload_alarms_callback
     reload_alarms_callback = func
 
+# LED-Toggle via Web abgeschafft – Steuerung erfolgt am Geraet
+
 
 # --------------------------------------------------------------------
 #   Security & File Management
@@ -116,7 +126,7 @@ ALLOWED_STATIC_FILES = {
     'neuza.webp': {'type': 'image/webp', 'safe': True, 'location': 'flash'},
     
     # System files (stored on SD card /sd/)
-    'debug_log.txt': {'type': 'text/plain', 'safe': True, 'debug_only': True, 'location': 'sd'},
+    'debug_log.txt': {'type': 'text/plain', 'safe': True, 'location': 'sd'},
     'alarm.txt': {'type': 'text/plain', 'safe': False, 'location': 'sd'},  # Internal only
     'power_config.txt': {'type': 'text/plain', 'safe': False, 'location': 'sd'},  # Internal only
     'wifis.txt': {'type': 'text/plain', 'safe': False, 'location': 'sd'}  # Internal only - NEVER serve
@@ -131,8 +141,8 @@ FORBIDDEN_PATTERNS = [
 
 def sanitize_filename(filename, log_path=None):
     """
-    Robuste Dateinamen-Bereinigung mit Sicherheitsprüfungen.
-    Verhindert Directory Traversal und unerwünschte Dateizugriffe.
+    Robuste Dateinamen-Bereinigung mit Sicherheitspruefungen.
+    Verhindert Directory Traversal und unerwuenschte Dateizugriffe.
     """
     if not filename:
         return None, "Leerer Dateiname"
@@ -143,14 +153,14 @@ def sanitize_filename(filename, log_path=None):
         if not filename:
             return None, "Dateiname nach Bereinigung leer"
         
-        # Gefährliche Zeichen und Muster prüfen
+        # Gefaehrliche Zeichen und Muster pruefen
         for pattern in FORBIDDEN_PATTERNS:
             if pattern in filename:
-                log_message(log_path, "[Security] Gefährlicher Pfad blockiert: " + filename)
+                log_message(log_path, "[Security] Gefaehrlicher Pfad blockiert: " + filename)
                 return None, "Unerlaubtes Zeichen/Muster: " + pattern
         
-        # Normalisierung mit os.path.normpath Äquivalent (MicroPython-kompatibel)
-        # Entferne führende/nachfolgende Leerzeichen und Slashes
+        # Normalisierung mit os.path.normpath aequivalent (MicroPython-kompatibel)
+        # Entferne fuehrende/nachfolgende Leerzeichen und Slashes
         filename = filename.strip(' /\\')
         
         # Entferne mehrfache Slashes
@@ -162,10 +172,10 @@ def sanitize_filename(filename, log_path=None):
         # Konvertiere Backslashes zu Forward slashes (Unix-Style)
         filename = filename.replace('\\', '/')
         
-        # Entferne führende Slashes (absoluter Pfad nicht erlaubt)
+        # Entferne fuehrende Slashes (absoluter Pfad nicht erlaubt)
         filename = filename.lstrip('/')
         
-        # Whitelist-Prüfung
+        # Whitelist-Pruefung
         if filename not in ALLOWED_STATIC_FILES:
             log_message(log_path, "[Security] Datei nicht in Whitelist: " + filename)
             return None, "Datei nicht erlaubt: " + filename
@@ -188,45 +198,10 @@ def sanitize_filename(filename, log_path=None):
         return None, "Bereinigungsfehler: " + str(e)
 
 
-def is_debug_mode_enabled():
-    """Prüft ob Debug-Modus aktiviert ist (für debug_log.txt Zugriff)"""
-    try:
-        # Debug-Modus kann über eine einfache Datei gesteuert werden
-        return file_exists("/sd/.debug_enabled")
-    except Exception:
-        return False
+# Debug-Modus vollstaendig entfernt – Logs sind immer sichtbar
 
 
-def enable_debug_mode(log_path=None):
-    """Aktiviert den Debug-Modus durch Erstellen der Debug-Flag-Datei"""
-    try:
-        with open("/sd/.debug_enabled", "w") as f:
-            f.write("1")
-        log_message(log_path, "[Debug] Debug-Modus aktiviert")
-        return True
-    except Exception as e:
-        log_message(log_path, "[Debug] Fehler beim Aktivieren: " + str(e))
-        return False
-
-
-def disable_debug_mode(log_path=None):
-    """Deaktiviert den Debug-Modus durch Löschen der Debug-Flag-Datei"""
-    try:
-        if file_exists("/sd/.debug_enabled"):
-            os.remove("/sd/.debug_enabled")
-        log_message(log_path, "[Debug] Debug-Modus deaktiviert")
-        return True
-    except Exception as e:
-        log_message(log_path, "[Debug] Fehler beim Deaktivieren: " + str(e))
-        return False
-
-
-def toggle_debug_mode(log_path=None):
-    """Schaltet Debug-Modus um (an/aus)"""
-    if is_debug_mode_enabled():
-        return disable_debug_mode(log_path)
-    else:
-        return enable_debug_mode(log_path)
+# Kein Debug-Toggle vorhanden
 
 
 def file_exists(path):
@@ -258,7 +233,13 @@ def _receive_http_request(sock):
         if not chunk:
             break
         data += chunk
-        if len(data) > 8192:  # rudimentärer DoS-Schutz
+        # Watchdog bei langsamen Clients fuettern
+        try:
+            from recovery_manager import feed_watchdog
+            feed_watchdog(None)
+        except Exception:
+            pass
+        if len(data) > 8192:  # rudimentaerer DoS-Schutz
             return "", ""
     if b"\r\n\r\n" not in data:
         return "", ""
@@ -272,11 +253,22 @@ def _receive_http_request(sock):
             clen = int(line.split(b":", 1)[1].strip())
             break
 
+    # Begrenze Body-Groesse strikt
+    MAX_BODY = 4096  # 4KB reicht fuer unsere Konfigs locker aus
+    if clen > MAX_BODY:
+        return header.decode(), "__BODY_TOO_LARGE__"
+
     while len(body) < clen:
         chunk = sock.recv(512)
         if not chunk:
             break
         body += chunk
+        # Watchdog bei grossen Bodies fuettern
+        try:
+            from recovery_manager import feed_watchdog
+            feed_watchdog(None)
+        except Exception:
+            pass
 
     # In MicroPython akzeptiert decode keine "errors"-KW-Args
     return header.decode(), body.decode()
@@ -285,11 +277,11 @@ def _receive_http_request(sock):
 # --------------------------------------------------------------------
 #   Haupt-Connection-Handler
 # --------------------------------------------------------------------
-_poller = uselect.poll()  # Nur ein Poll-Objekt für alle Aufrufe
+_poller = uselect.poll()  # Nur ein Poll-Objekt fuer alle Aufrufe
 
 
 class PollerGuard:
-    """Context manager für sichere Poller-Registration"""
+    """Context manager fuer sichere Poller-Registration"""
     def __init__(self, sock, events=uselect.POLLIN):
         self.sock = sock
         self.events = events
@@ -315,7 +307,7 @@ class PollerGuard:
 def handle_website_connection(s, log_path=None):
     cl = None
     
-    # Memory-Monitoring für Web-Requests
+    # Memory-Monitoring fuer Web-Requests
     from memory_monitor import monitor_memory
     monitor_memory(log_path, context="web_request_start")
     
@@ -331,25 +323,36 @@ def handle_website_connection(s, log_path=None):
             pass
 
         # Connection mit Timeout
-        s.settimeout(1.0)  # 1 Sekunde Timeout für accept
+        s.settimeout(1.0)  # 1 Sekunde Timeout fuer accept
         cl, addr = s.accept()
-        cl.settimeout(5.0)  # 5 Sekunden für Request-Verarbeitung
+        cl.settimeout(5.0)  # 5 Sekunden fuer Request-Verarbeitung
         cl.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        _feed_wdt(log_path)
 
         try:
             header, body = _receive_http_request(cl)
+            _feed_wdt(log_path)
             if not header:
                 cl.close()
                 return
 
-            method, path, _ = header.splitlines()[0].split()
+            first_line = header.splitlines()[0]
+            parts = first_line.split()
+            if len(parts) < 2:
+                cl.close()
+                return
+            method, path = parts[0], parts[1]
             
             # Debug: Alle Requests loggen
             log_message(log_path, "[Request] {} {}".format(method, path))
             
-            # Security logging nur für wirklich gefährliche Anfragen
+            # Security logging nur fuer wirklich gefaehrliche Anfragen
             if any(pattern in path for pattern in FORBIDDEN_PATTERNS):
                 log_message(log_path, "[Security] Blockiert: " + method + " " + path)
+                return
+
+            if body == "__BODY_TOO_LARGE__":
+                cl.sendall(b"HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n")
                 return
 
             if method == "POST" and path == "/save_alarms":
@@ -358,29 +361,33 @@ def handle_website_connection(s, log_path=None):
                 if reload_alarms_callback:
                     reload_alarms_callback()
                 cl.sendall(b"HTTP/1.1 200 OK\r\nContent-Type:text/plain\r\n\r\nOK")
+                _feed_wdt(log_path)
 
             elif method == "POST" and path == "/save_display_settings":
                 log_message(log_path, "[POST] Speichere Display-Settings: {} bytes".format(len(body)))
                 _save_display_settings(body, log_path)
                 cl.sendall(b"HTTP/1.1 200 OK\r\nContent-Type:text/plain\r\n\r\nOK")
+                _feed_wdt(log_path)
 
-            elif method == "POST" and path == "/toggle_debug":
-                _toggle_debug_mode(cl, log_path)
+            # LED/Debug Post-Endpunkte entfernt
 
             elif path in ("/", "/index.html"):
+                _feed_wdt(log_path)
                 _serve_index_page(cl, log_path)
+                _feed_wdt(log_path)
 
-            elif path == "/debug":
-                _serve_debug_file(cl, log_path)
-                
             elif path == "/logs":
+                _feed_wdt(log_path)
                 _serve_log_file(cl, log_path)
+                _feed_wdt(log_path)
 
             else:
-                # Alle anderen Anfragen über sichere Datei-Serving-Funktion
+                # Alle anderen Anfragen ueber sichere Datei-Serving-Funktion
                 requested_file = path.lstrip("/")
                 if requested_file:  # Nur nicht-leere Pfade verarbeiten
+                    _feed_wdt(log_path)
                     _serve_file_from_sd(cl, requested_file, log_path)
+                    _feed_wdt(log_path)
                 else:
                     # Leerer Pfad -> redirect zu index
                     cl.sendall(b"HTTP/1.1 302 Found\r\nLocation: /\r\n\r\n")
@@ -419,11 +426,11 @@ def handle_website_connection(s, log_path=None):
 def _safe_save_operation(operation_name, save_func, *args, **kwargs):
     """
     Thread-sichere Speicher-Operation mit Sperre.
-    Verhindert Race Conditions bei gleichzeitigen Speicher-Vorgängen.
+    Verhindert Race Conditions bei gleichzeitigen Speicher-Vorgaengen.
     """
     global _save_lock
     
-    # Sperre prüfen und setzen
+    # Sperre pruefen und setzen
     if _save_lock:
         log_message(kwargs.get('log_path'), 
                    "Speicher-Vorgang '{}' blockiert - anderer Vorgang aktiv".format(operation_name))
@@ -434,11 +441,11 @@ def _safe_save_operation(operation_name, save_func, *args, **kwargs):
         log_message(kwargs.get('log_path'), 
                    "Speicher-Vorgang '{}' gestartet (Sperre aktiv)".format(operation_name))
         
-        # Kurze Verzögerung um Race Conditions zu vermeiden
+        # Kurze Verzoegerung um Race Conditions zu vermeiden
         import time
         time.sleep(0.01)  # 10ms
         
-        # Eigentliche Speicher-Operation ausführen
+        # Eigentliche Speicher-Operation ausfuehren
         result = save_func(*args, **kwargs)
         
         log_message(kwargs.get('log_path'), 
@@ -452,7 +459,7 @@ def _safe_save_operation(operation_name, save_func, *args, **kwargs):
     finally:
         _save_lock = False
         log_message(kwargs.get('log_path'), 
-                   "Speicher-Sperre für '{}' freigegeben".format(operation_name))
+                   "Speicher-Sperre fuer '{}' freigegeben".format(operation_name))
 
 
 # --------------------------------------------------------------------
@@ -460,6 +467,30 @@ def _safe_save_operation(operation_name, save_func, *args, **kwargs):
 # --------------------------------------------------------------------
 def _save_alarms_unsafe(body, log_path=None):
     try:
+        # defensive parsing
+        def _sanitize_text(txt):
+            try:
+                # CR/LF entfernen und trimmen
+                txt = txt.replace("\r", " ").replace("\n", " ")
+                txt = txt.strip()
+                # Strenge Whitelist: A-Z a-z 0-9 Leerzeichen () - _ . , :
+                allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ()-_.:,"
+                buf = []
+                for ch in txt:
+                    # Nur ASCII druckbar und in Whitelist
+                    if 32 <= ord(ch) <= 126 and ch in allowed:
+                        buf.append(ch)
+                    else:
+                        buf.append('_')
+                txt = ''.join(buf)
+                # Laenge begrenzen
+                if len(txt) > 32:
+                    txt = txt[:32]
+                # Leere Werte ersetzen
+                return txt or "Kein Text"
+            except Exception:
+                return "Kein Text"
+
         lines = [ln.strip() for ln in body.split("\n") if ln.strip()]
         if not lines:
             log_message(log_path, "Leerer POST-Body – Alarme nicht geaendert.")
@@ -471,7 +502,7 @@ def _save_alarms_unsafe(body, log_path=None):
                 if len(teile) < 2:
                     continue
 
-                uhrzeit, text = teile[0], teile[1] or "Kein Text"
+                uhrzeit, text = teile[0], _sanitize_text(teile[1] or "Kein Text")
                 if not (
                     len(uhrzeit) == 5
                     and uhrzeit[2] == ":"
@@ -506,23 +537,19 @@ def _save_alarms(body, log_path=None):
 #   Statische Dateien
 # --------------------------------------------------------------------
 def _serve_file_from_sd(cl, file_name, log_path=None):
-    # Robuste Eingabe-Bereinigung und Sicherheitsprüfung
+    # Robuste Eingabe-Bereinigung und Sicherheitspruefung
     if isinstance(file_name, (list, tuple)):
         file_name = file_name[0] if file_name else ""
     
-    # Dateiname sanitisieren und Whitelist prüfen
+    # Dateiname sanitisieren und Whitelist pruefen
     clean_filename, error = sanitize_filename(file_name, log_path)
     if not clean_filename:
         log_message(log_path, "[Security] Dateianfrage abgelehnt: " + str(file_name) + " -> " + str(error))
-        cl.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n<h1>Zugriff verweigert</h1>")
+        cl.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n403")
         return
     
-    # Debug-Dateien nur bei aktiviertem Debug-Modus
+    # Datei-Infos aus Whitelist
     file_info = ALLOWED_STATIC_FILES[clean_filename]
-    if file_info.get('debug_only', False) and not is_debug_mode_enabled():
-        log_message(log_path, "[Security] Debug-Datei ohne Debug-Modus angefordert: " + clean_filename)
-        cl.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n<h1>Nicht verfuegbar</h1>")
-        return
     
     # Pfad-Konstruktion basierend auf Datei-Location
     file_location = file_info.get('location', 'sd')
@@ -533,7 +560,7 @@ def _serve_file_from_sd(cl, file_name, log_path=None):
     
     if not file_exists(path):
         log_message(log_path, "Bereinigte Datei nicht gefunden: " + path)
-        cl.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n<h1>Datei nicht gefunden</h1>")
+        cl.sendall(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n404")
         return
     try:
         size = os.stat(path)[6]
@@ -544,8 +571,9 @@ def _serve_file_from_sd(cl, file_name, log_path=None):
         header = (
             "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\n"
             "Cache-Control: max-age=86400\r\n"
-            "X-Content-Type-Options: nosniff\r\n"  # Security Header
-            "X-Frame-Options: DENY\r\n\r\n"       # Prevent embedding
+            "X-Content-Type-Options: nosniff\r\n"
+            "X-Frame-Options: DENY\r\n"
+            "Connection: close\r\n\r\n"
         ).format(content_type, size)
         cl.sendall(header.encode())
         
@@ -556,101 +584,53 @@ def _serve_file_from_sd(cl, file_name, log_path=None):
         with open(path, "rb") as f:
             chunk_count = 0
             while True:
-                chunk = f.read(2048)
+                chunk = f.read(1024)
                 if not chunk:
                     break
                 cl.sendall(chunk)
                 
-                # Watchdog alle 10 Chunks füttern (verhindert Reset bei großen Dateien)
+                # Watchdog alle 10 Chunks fuettern (verhindert Reset bei grossen Dateien)
                 chunk_count += 1
                 if chunk_count % 10 == 0:
                     try:
                         from recovery_manager import feed_watchdog
                         feed_watchdog(log_path)
                     except:
-                        pass  # Falls Import fehlschlägt, weiterarbeiten
+                        pass  # Falls Import fehlschlaegt, weiterarbeiten
     except Exception as e:
         log_message(log_path, "Fehler beim Senden von " + clean_filename + ": " + str(e))
         try:
-            cl.sendall(b"HTTP/1.1 500\r\n\r\nInterner Fehler")
+            cl.sendall(b"HTTP/1.1 500\r\nConnection: close\r\n\r\n500")
         except Exception:
             pass
 
 
-def _serve_debug_file(cl, log_path=None):
-    # Debug-Modus Sicherheitsprüfung
-    if not is_debug_mode_enabled():
-        log_message(log_path, "[Security] Debug-Zugriff ohne aktivierten Debug-Modus verweigert")
-        cl.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n<h1>Nicht verfuegbar</h1>")
-        return
-    
-    # Sichere Dateiname-Überprüfung über Whitelist
-    clean_filename, error = sanitize_filename("debug_log.txt", log_path)
-    if not clean_filename:
-        log_message(log_path, "[Security] Debug-Dateiname nicht validiert: " + str(error))
-        cl.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n<h1>Zugriff verweigert</h1>")
-        return
-    
-    path = "/sd/" + clean_filename
-    if not file_exists(path):
-        cl.sendall(b"HTTP/1.1 404\r\n\r\nDebug-Datei nicht gefunden")
-        return
-        
-    try:
-        cl.sendall(b"HTTP/1.1 200 OK\r\nContent-Type:text/html\r\n"
-                  b"X-Content-Type-Options: nosniff\r\n"
-                  b"X-Frame-Options: DENY\r\n\r\n"
-                  b"<html><body><h2>Debug Log (Sichere Ansicht)</h2><pre>")
-        
-        # Sichere Zeilenweise Ausgabe mit Größenbegrenzung
-        line_count = 0
-        max_lines = 500  # Begrenze Ausgabe
-        
-        with open(path) as f:
-            for line in f:
-                if line_count >= max_lines:
-                    cl.sendall(b"\n... [Log zu lang, nur erste 500 Zeilen angezeigt] ...")
-                    break
-                cl.sendall(html_escape(line).encode())
-                line_count += 1
-                
-        cl.sendall("</pre><br><a href='/'>Zurueck</a></body></html>".encode())
-        log_message(log_path, "Debug-Logdatei sicher ausgeliefert (" + str(line_count) + " Zeilen).")
-    except Exception as e:
-        log_message(log_path, "Fehler beim Debug-Log-Serving: " + str(e))
-        try:
-            cl.sendall(b"HTTP/1.1 500\r\n\r\nInterner Fehler")
-        except Exception:
-            pass
+# Debug-Serving entfernt – stattdessen immer /logs verwenden
 
 
 def _serve_log_file(cl, log_path=None):
-    """Serviert Log-Datei - immer verfügbar (kein Debug-Modus erforderlich)"""
+    """Serviert Log-Datei - immer verfuegbar (kein Debug-Modus erforderlich)"""
     clean_filename, error = sanitize_filename("debug_log.txt", log_path)
     if not clean_filename:
         log_message(log_path, "[Security] Log-Dateiname nicht validiert: " + str(error))
-        cl.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n<h1>Zugriff verweigert</h1>")
+        cl.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n403")
         return
     
     path = "/sd/" + clean_filename
     if not file_exists(path):
-        cl.sendall(b"HTTP/1.1 404\r\n\r\n<h1>Log-Datei nicht gefunden</h1>")
+        cl.sendall(b"HTTP/1.1 404\r\nConnection: close\r\n\r\n404")
         return
         
     try:
-        cl.sendall(b"HTTP/1.1 200 OK\r\nContent-Type:text/html\r\n"
+        cl.sendall(b"HTTP/1.1 200 OK\r\nContent-Type:text/html\r\nConnection: close\r\n"
                   b"X-Content-Type-Options: nosniff\r\n"
                   b"X-Frame-Options: DENY\r\n\r\n"
-                  b"<html><head><title>Neuza Wecker - Logs</title><style>"
-                  b"body{font-family:monospace;background:#fff0f5;color:#5c1a33;margin:20px;}"
-                  b"pre{background:#ffe6ef;padding:15px;border-radius:10px;overflow-x:auto;}"
-                  b"h2{color:#d6336c;}a{color:#ff85a2;}</style></head>"
-                  b"<body><h2>\xf0\x9f\x93\x8b Neuza Wecker - System Logs</h2><pre>")
-        
-        # Sichere Zeilenweise Ausgabe mit Größenbegrenzung
+                  b"<html><head><meta charset='UTF-8'><title>Logs</title></head><body><pre>")
+
+        # Sichere Zeilenweise Ausgabe mit Groessenbegrenzung
         line_count = 0
-        max_lines = 800  # Mehr Zeilen für normalen Log-Viewer
-        
+        max_lines = 500  # weiter reduziert fuer noch geringeren Speicherbedarf
+
         with open(path) as f:
             for line in f:
                 if line_count >= max_lines:
@@ -658,41 +638,23 @@ def _serve_log_file(cl, log_path=None):
                     break
                 cl.sendall(html_escape(line).encode())
                 line_count += 1
-        
-        cl.sendall(b"</pre><p><a href='/'>\xe2\x86\x90 Zurueck zur Hauptseite</a></p></body></html>")
+                # Watchdog regelmaessig fuettern beim Lang-Stream
+                if line_count % 50 == 0:
+                    try:
+                        from recovery_manager import feed_watchdog
+                        feed_watchdog(log_path)
+                    except Exception:
+                        pass
+
+        cl.sendall(b"</pre><p><a href='/'>&#x2190; Zurueck</a></p></body></html>")
         log_message(log_path, "Log-Datei ausgeliefert (" + str(line_count) + " Zeilen).")
-        
+
     except Exception as e:
         log_message(log_path, "Log-Datei Lesefehler: " + str(e))
-        cl.sendall(b"Fehler beim Lesen der Log-Datei")
+        cl.sendall(b"HTTP/1.1 500\r\nConnection: close\r\n\r\n500")
 
 
-def _toggle_debug_mode(cl, log_path=None):
-    """Schaltet Debug-Modus um und gibt Status zurück"""
-    try:
-        old_state = is_debug_mode_enabled()
-        success = toggle_debug_mode(log_path)
-        new_state = is_debug_mode_enabled()
-        
-        if success:
-            status = "aktiviert" if new_state else "deaktiviert"
-            message = "Debug-Modus erfolgreich " + status
-            log_message(log_path, "[Admin] " + message, force=True)
-            response = "HTTP/1.1 200 OK\r\nContent-Type:text/plain\r\n\r\n" + message
-        else:
-            message = "Fehler beim Umschalten des Debug-Modus"
-            log_message(log_path, "[Admin] " + message)
-            response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type:text/plain\r\n\r\n" + message
-            
-        cl.sendall(response.encode())
-        
-    except Exception as e:
-        error_msg = "Kritischer Fehler beim Debug-Toggle: " + str(e)
-        log_message(log_path, "[Admin] " + error_msg)
-        try:
-            cl.sendall(b"HTTP/1.1 500\r\n\r\nInterner Server Fehler")
-        except Exception:
-            pass
+# Debug-Toggle entfernt
 
 
 # --------------------------------------------------------------------
@@ -705,11 +667,28 @@ def _save_display_settings_unsafe(body, log_path=None):
             if '=' in line:
                 key, value = line.split('=', 1)
                 settings[key.strip()] = value.strip()
-        
+
+        def _valid_time(ts):
+            try:
+                if len(ts) != 5 or ts[2] != ':':
+                    return False
+                hh = int(ts[:2]); mm = int(ts[3:])
+                return 0 <= hh <= 23 and 0 <= mm <= 59
+            except Exception:
+                return False
+
+        auto = 'true' if settings.get('DISPLAY_AUTO', 'true').lower() == 'true' else 'false'
+        on_t = settings.get('DISPLAY_ON_TIME', '07:00')
+        off_t = settings.get('DISPLAY_OFF_TIME', '22:00')
+        if not _valid_time(on_t):
+            on_t = '07:00'
+        if not _valid_time(off_t):
+            off_t = '22:00'
+
         with open("/sd/power_config.txt", "w") as f:
-            f.write("DISPLAY_AUTO=" + settings.get('DISPLAY_AUTO', 'true') + "\n")
-            f.write("DISPLAY_ON_TIME=" + settings.get('DISPLAY_ON_TIME', '07:00') + "\n") 
-            f.write("DISPLAY_OFF_TIME=" + settings.get('DISPLAY_OFF_TIME', '22:00') + "\n")
+            f.write("DISPLAY_AUTO=" + auto + "\n") 
+            f.write("DISPLAY_ON_TIME=" + on_t + "\n") 
+            f.write("DISPLAY_OFF_TIME=" + off_t + "\n")
         
         os.sync()
         log_message(log_path, "Display-Einstellungen gespeichert.")
@@ -753,7 +732,7 @@ def _serve_index_page(cl, log_path=None):
     try:
         # AGGRESSIVE Memory Cleanup vor HTML-Rendering
         import gc
-        for _ in range(3):  # Mehrere GC-Durchläufe
+        for _ in range(3):  # Mehrere GC-Durchlaeufe
             gc.collect()
         
         # Memory-Safe: Stream HTML in kleinen Chunks
@@ -778,7 +757,7 @@ def _serve_index_page(cl, log_path=None):
 
 def _send_http_header(cl):
     """Sendet HTTP-Header memory-safe"""
-    cl.sendall(b"HTTP/1.1 200 OK\r\nContent-Type:text/html\r\n\r\n")
+    cl.sendall(b"HTTP/1.1 200 OK\r\nContent-Type:text/html\r\nConnection: close\r\n\r\n")
 
 
 def _send_html_chunks(cl, log_path=None):
@@ -786,17 +765,17 @@ def _send_html_chunks(cl, log_path=None):
     import gc
     
     # Chunk 1: HTML Header (klein halten!)
-    chunk1 = b"""<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Neuza Wecker</title><link rel="stylesheet" href="styles.css"></head>
+    chunk1 = b"""<!DOCTYPE html><html lang=\"de\"><head><meta charset=\"UTF-8\">
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
+<title>Neuza Wecker</title><link rel=\"stylesheet\" href=\"styles.css\"></head>
 <body><header><h1>Neuza Wecker</h1></header>
-<div class="main-container"><div class="image-container">
-<img src="neuza.webp" alt="Neuza" onerror="this.style.display='none'"></div>
-<div class="form-container"><form id="alarmForm">"""
+<main>
+<img src=\"neuza.webp\" alt=\"Neuza\" onerror=\"this.style.display='none'\">
+<form id=\"alarmForm\">"""
     cl.sendall(chunk1)
     gc.collect()  # Nach jedem Chunk
     
-    # Chunk 2: Alarm-Blöcke (Memory-sparend laden)
+    # Chunk 2: Alarm-Bloecke (Memory-sparend laden)
     alarme = _load_alarms("/sd/alarm.txt")
     _send_alarm_blocks_safe(cl, alarme)
     gc.collect()  # Nach Alarmen
@@ -811,7 +790,7 @@ def _send_html_chunks(cl, log_path=None):
 
 
 def _send_alarm_blocks_safe(cl, alarme):
-    """Memory-sichere Alarm-Block Übertragung"""
+    """Memory-sichere Alarm-Block uebertragung"""
     import gc
     all_alarms = alarme + [("", "", [], "")] * (5 - len(alarme))
     
@@ -820,7 +799,7 @@ def _send_alarm_blocks_safe(cl, alarme):
         block = _generate_alarm_block(zeit, text, tage, aktiv)
         cl.sendall(block.encode())
         
-        # Memory cleanup alle 2 Blöcke
+        # Memory cleanup alle 2 Bloecke
         if i % 2 == 1:
             gc.collect()
 
@@ -834,58 +813,53 @@ def _generate_alarm_block(zeit, text, tage, aktiv):
     
     chk_a = "checked" if aktiv.strip().lower() == "aktiv" else ""
     
-    return '''<div class="alarm-block">
+    return '''<fieldset>
 <input type="time" value="{}">
 <input type="text" value="{}">
-<div class="checkboxes">
+<div>
 {}
 <label><input type="checkbox" {}> Aktiv</label>
-</div></div>\n'''.format(
+</div></fieldset>\n'''.format(
         zeit, html_escape(text), chk_days, chk_a)
 
 
 def _send_display_block_safe(cl):
-    """Memory-sichere Display-Settings Übertragung"""
+    """Memory-sichere Display-Settings uebertragung"""
     settings = _load_display_settings()
     
-    block = '''<div class="display-settings-block">
-<h3>Display-Einstellungen</h3>
+    auto_enabled = settings.get('DISPLAY_AUTO', 'true') == 'true'
+    on_time = settings.get('DISPLAY_ON_TIME', '07:00')
+    off_time = settings.get('DISPLAY_OFF_TIME', '22:00')
+
+    block = '''<fieldset>
 <label><input type="checkbox" id="displayAuto" {}> Automatisches Ein/Aus</label><br>
 <label>Ein-Zeit: <input type="time" id="displayOn" value="{}"></label><br>
 <label>Aus-Zeit: <input type="time" id="displayOff" value="{}"></label><br>
-<button type="button" class="led-toggle-btn" onclick="toggleLEDs()">💡 LEDs Ein/Aus</button>
-</div>\n'''.format(
-        "checked" if settings.get('auto', True) else "",
-        settings.get('on_time', '06:45'),
-        settings.get('off_time', '20:00')
+</fieldset>\n'''.format(
+        "checked" if auto_enabled else "",
+        on_time,
+        off_time
     )
     cl.sendall(block.encode())
 
 
 def _send_footer_chunks(cl, log_path=None):
-    """Memory-sichere Footer und JavaScript Übertragung"""
+    """Minimaler Abschluss: nur Save-Button und JS, kein Footer"""
     import gc
-    
-    # Button-Container mit Log-Button und Save-Button
-    debug_link = ' | <a href="/debug">Debug</a>' if is_debug_mode_enabled() else ''
-    footer1 = '''<div class="button-container">
-<button id="saveButton" type="button" onclick="saveAllSettings()">Alle Einstellungen speichern</button>
-<button type="button" class="log-btn" onclick="window.open('/logs', '_blank')">📋 System Logs anzeigen</button>
+    minimal = '''<div>
+<button id="saveButton" type="button" onclick="saveAllSettings()">Speichern</button>
+<a href="/logs">Logs</a>
 </div>
-</form></div></div><footer>Neuza Wecker{}</footer>\n'''.format(debug_link)
-    cl.sendall(footer1.encode())
+</form></main>'''
+    cl.sendall(minimal.encode())
     gc.collect()
-    
-    # JavaScript als komplettes Stück (sicherer für Funktionen)
     js_complete = "<script>" + JS_SNIPPET + "</script>"
     cl.sendall(js_complete.encode())
     gc.collect()
-    
-    # HTML Ende
     cl.sendall(b"</body></html>")
 
 
-# Alte _split_javascript entfernt - JavaScript wird jetzt als komplettes Stück gesendet
+# Alte _split_javascript entfernt - JavaScript wird jetzt als komplettes Stueck gesendet
 
 
 # _html_escape entfernt - verwende html_escape() stattdessen
@@ -894,7 +868,8 @@ def _send_footer_chunks(cl, log_path=None):
 def _send_error_response(cl, code, message):
     """Memory-sichere Error Response"""
     try:
-        response = "HTTP/1.1 {} {}\r\n\r\n{}".format(code, message, message)
+        # Minimalschmales Fehlerformat
+        response = "HTTP/1.1 {} {}\r\nConnection: close\r\n\r\n{}".format(code, message, code)
         cl.sendall(response.encode())
     except Exception:
         pass  # Fehler beim Fehler-senden ignorieren
@@ -921,67 +896,12 @@ def _load_alarms(path):
             elif "=" in line:
                 k, v = line.split("=", 1)
                 alarm[k.strip()] = v.strip()
-    return alarme[:5]  # maximal fünf zurückliefern
+    return alarme[:5]  # maximal fuenf zurueckliefern
 
 
 # Alte _render_index() und INDEX_TEMPLATE entfernt - ersetzt durch Streaming-System (_send_html_chunks)
 
-JS_SNIPPET = """async function saveAllSettings(){
-const b=document.getElementById('saveButton');
-if(!b){alert('Button nicht gefunden!');return;}
-b.disabled=true;b.textContent='Speichern…';
-console.log('saveAllSettings gestartet');
-const a=[];const blocks=document.querySelectorAll('.alarm-block');
-console.log('Alarm-Blöcke gefunden:',blocks.length);
-blocks.forEach((x,i)=>{
-const t=x.querySelector('input[type="time"]');
-const m=x.querySelector('input[type="text"]');
-if(!t||!m)return;
-const tv=t.value.trim();const mv=m.value.trim();
-if(!tv&&!mv)return;
-const c=x.querySelectorAll('.checkboxes input');
-const tage=new Set();let aktiv=false;
-c.forEach(cb=>{const l=cb.parentElement.textContent.trim();
-if(l==='Aktiv'){aktiv=cb.checked;}
-else if(cb.checked&&l.match(/^(Mo|Di|Mi|Do|Fr|Sa|So)$/)){tage.add(l);}});
-const tageArr=Array.from(tage).sort();
-const alarmStr=[tv,mv||'Kein Text',tageArr.join(','),aktiv?'Aktiv':'Inaktiv'].join(',');
-a.push(alarmStr);console.log('Alarm',i+1,':',alarmStr);});
-console.log('Alarme gesamt:',a.length);
-let ok1=true,ok2=true;
-if(a.length){try{b.textContent='Weckzeiten…';
-const r1=await fetch('/save_alarms',{method:'POST',headers:{'Content-Type':'text/plain'},body:a.join('\\n')});
-ok1=r1.ok;console.log('Alarme:',r1.status);}catch(e){console.error('Alarm-Fehler:',e);ok1=false;}}
-await new Promise(r=>setTimeout(r,100));
-try{b.textContent='Display…';
-const da=document.getElementById('displayAuto');
-const don=document.getElementById('displayOn');
-const doff=document.getElementById('displayOff');
-if(!da||!don||!doff){console.error('Display-Inputs fehlen');ok2=false;}else{
-const d=['DISPLAY_AUTO='+da.checked,'DISPLAY_ON_TIME='+don.value,'DISPLAY_OFF_TIME='+doff.value];
-const r2=await fetch('/save_display_settings',{method:'POST',body:d.join('\\n')});
-ok2=r2.ok;console.log('Display:',r2.status);}}catch(e){console.error('Display-Fehler:',e);ok2=false;}
-b.textContent=ok1&&ok2?'Alles gespeichert ✅':'Fehler beim Speichern';
-console.log('Ergebnis: Alarme='+ok1+', Display='+ok2);
-setTimeout(()=>{b.disabled=false;b.textContent='Alle Einstellungen speichern';},3000);
-}
-
-async function toggleLEDs(){
-const btn=event.target;
-if(!btn)return;
-btn.disabled=true;
-btn.textContent='💡 Schalte...';
-try{
-const r=await fetch('/toggle_leds',{method:'POST'});
-const success=r.ok;
-btn.textContent=success?'💡 LEDs umgeschaltet ✅':'💡 Fehler beim Schalten';
-setTimeout(()=>{btn.disabled=false;btn.textContent='💡 LEDs Ein/Aus';},2000);
-}catch(e){
-console.error('LED-Toggle Fehler:',e);
-btn.textContent='💡 Verbindungsfehler';
-setTimeout(()=>{btn.disabled=false;btn.textContent='💡 LEDs Ein/Aus';},2000);
-}
-}"""
+JS_SNIPPET = """async function saveAllSettings(){const b=document.getElementById('saveButton');if(!b)return;b.disabled=true;b.textContent='Speichern…';const a=[],bs=document.querySelectorAll('#alarmForm fieldset');for(const x of bs){const t=x.querySelector('input[type=\"time\"]'),m=x.querySelector('input[type=\"text\"]');if(!t||!m)continue;const tv=t.value.trim(),mv=m.value.trim();if(!tv&&!mv)continue;const c=x.querySelectorAll('input[type=\"checkbox\"]');const g=new Set;let ak=false;for(const cb of c){const l=cb.parentElement.textContent.trim();if(l==='Aktiv')ak=cb.checked;else if(cb.checked&&(l==='Mo'||l==='Di'||l==='Mi'||l==='Do'||l==='Fr'||l==='Sa'||l==='So'))g.add(l);}a.push([tv,mv||'Kein Text',Array.from(g).sort().join(','),ak?'Aktiv':'Inaktiv'].join(','));}let ok1=true,ok2=true;if(a.length){try{const r1=await fetch('/save_alarms',{method:'POST',headers:{'Content-Type':'text/plain'},body:a.join('\\n')});ok1=r1.ok;}catch(e){ok1=false;}}try{const da=document.getElementById('displayAuto'),don=document.getElementById('displayOn'),doff=document.getElementById('displayOff');if(da&&don&&doff){const d=['DISPLAY_AUTO='+da.checked,'DISPLAY_ON_TIME='+don.value,'DISPLAY_OFF_TIME='+doff.value];const r2=await fetch('/save_display_settings',{method:'POST',body:d.join('\\n')});ok2=r2.ok;}else ok2=false;}catch(e){ok2=false;}b.textContent=ok1&&ok2?'Gespeichert':'Fehler';setTimeout(()=>{b.disabled=false;b.textContent='Speichern';},2000);}"""
 
 
 # --------------------------------------------------------------------
@@ -1004,45 +924,16 @@ def _get_content_type(name):
     return "application/octet-stream"
 
 
-# --------------------------------------------------------------------
-#   Security Management Functions
-# --------------------------------------------------------------------
-def enable_debug_mode(log_path=None):
-    """Aktiviert den Debug-Modus (erstellt .debug_enabled Datei)"""
-    try:
-        with open("/sd/.debug_enabled", "w") as f:
-            import time
-            f.write("Debug enabled at: {}".format(str(time.localtime())))
-        log_message(log_path, "[Security] Debug-Modus aktiviert", force=True)
-        return True
-    except Exception as e:
-        log_message(log_path, "[Security] Debug-Modus Aktivierung fehlgeschlagen: {}".format(str(e)))
-        return False
-
-
-def disable_debug_mode(log_path=None):
-    """Deaktiviert den Debug-Modus (löscht .debug_enabled Datei)"""
-    try:
-        if file_exists("/sd/.debug_enabled"):
-            os.remove("/sd/.debug_enabled")
-        log_message(log_path, "[Security] Debug-Modus deaktiviert", force=True)
-        return True
-    except Exception as e:
-        log_message(log_path, "[Security] Debug-Modus Deaktivierung fehlgeschlagen: {}".format(str(e)))
-        return False
-
-
 def get_security_status(log_path=None):
-    """Gibt aktuellen Sicherheitsstatus zurück"""
+    """Gibt aktuellen Sicherheitsstatus zurueck"""
     try:
         status = {
-            'debug_mode': is_debug_mode_enabled(),
             'allowed_files': len(ALLOWED_STATIC_FILES),
             'whitelist_active': True,
             'sanitization_active': True
         }
         
-        # Zähle verfügbare Dateien
+        # Zaehle verfuegbare Dateien
         available_files = []
         for filename in ALLOWED_STATIC_FILES:
             if file_exists("/sd/{}".format(filename)):
@@ -1059,11 +950,11 @@ def get_security_status(log_path=None):
 #   Health Check & Status Functions
 # --------------------------------------------------------------------
 def is_webserver_healthy(s):
-    """Überprüft ob der Webserver noch funktionsfähig ist"""
+    """ueberprueft ob der Webserver noch funktionsfaehig ist"""
     if not s:
         return False
     try:
-        # Versuche Socket-Status zu prüfen
+        # Versuche Socket-Status zu pruefen
         s.settimeout(0.1)
         return True
     except Exception:
@@ -1071,11 +962,11 @@ def is_webserver_healthy(s):
 
 
 def get_webserver_status():
-    """Gibt aktuellen Webserver-Status zurück"""
+    """Gibt aktuellen Webserver-Status zurueck"""
     try:
         return {
             'blue_led': blue_led.value(),
-            'poller_active': True,  # Vereinfacht - könnte erweitert werden
+            'poller_active': True,  # Vereinfacht - koennte erweitert werden
             'security': get_security_status()
         }
     except Exception:

@@ -7,7 +7,7 @@ from log_utils import log_message
 # -------- RTC-Instanz -------------------------------------------------
 rtc = RTC(sda_pin=20, scl_pin=21)  # Pins ggf. anpassen
 
-# Fallback für RTC-Ausfälle (verhindert Zeitsprünge auf 2000)
+# Fallback fuer RTC-Ausfaelle (verhindert Zeitspruenge auf 2000)
 _last_good_time = None
 
 
@@ -19,19 +19,19 @@ def aktualisiere_zeit(log_path=None):
     Liefert (hour, minute, second, weekday_index_0, day, month, year).
     Bei Fehler → mehrere Versuche, dann Fallback.
     """
-    # Mehrere Versuche für RTC-Lesung (I2C kann manchmal hängen)
+    # Mehrere Versuche fuer RTC-Lesung (I2C kann manchmal haengen)
     for attempt in range(3):
         try:
             result = rtc.read_time()
             if result is None:
                 if attempt < 2:
-                    time.sleep(0.1)  # Kurz warten vor nächstem Versuch
+                    time.sleep(0.1)  # Kurz warten vor naechstem Versuch
                     continue
                 raise ValueError("RTC read returned None after 3 attempts")
             
             second, minute, hour, weekday, day, month, year = result
             
-            # Plausibilitätsprüfung
+            # Plausibilitaetspruefung
             if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
                 if attempt < 2:
                     time.sleep(0.1)
@@ -40,7 +40,7 @@ def aktualisiere_zeit(log_path=None):
                 
             aktueller_tag = weekday - 1  # 0=So … 6=Sa
             
-            # Speichere als letzte gute Zeit (verhindert 2000er-Zeitsprünge)
+            # Speichere als letzte gute Zeit (verhindert 2000er-Zeitspruenge)
             global _last_good_time
             _last_good_time = (hour, minute, second, aktueller_tag, day, month, year)
             
@@ -67,7 +67,7 @@ def aktualisiere_zeit(log_path=None):
 # ---------------------------------------------------------------------
 def bestimme_zeitzone_offset(jahr, monat, tag, log_path=None):
     try:
-        # letzter Sonntag im März
+        # letzter Sonntag im Maerz
         sommerzeit_start = max(
             w
             for w in range(25, 32)
@@ -133,8 +133,8 @@ def synchronisiere_zeit(log_path=None):
             # Nutze die robuste aktualisiere_zeit Funktion statt direktes RTC-Read
             hour, minute, second, aktueller_tag, day, month, year = aktualisiere_zeit(log_path)
             
-            # Plausibilitätsprüfung - verhindert Zeitsprünge
-            if year < 2020:  # Verhindert Fallback auf 2000 oder andere ungültige Jahre
+            # Plausibilitaetspruefung - verhindert Zeitspruenge
+            if year < 2020:  # Verhindert Fallback auf 2000 oder andere ungueltige Jahre
                 log_message(log_path, "RTC-Jahr {} unplausibel, behalte aktuelle Zeit", year)
                 return False
                 

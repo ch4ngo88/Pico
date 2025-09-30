@@ -1,0 +1,3 @@
+POLLIN: int
+
+def poll(*args, **kwargs): ...

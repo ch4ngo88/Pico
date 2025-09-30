@@ -2,6 +2,7 @@
 import time
 from log_utils import log_message, log_important
 from sound_config import paus
+from recovery_manager import feed_watchdog
 
 try:
     from neopixel import myNeopixel
@@ -54,7 +55,7 @@ def wheel(pos):
     return pos * 3, 0, 255 - pos * 3
 
 
-# Fallback für Wrapper ohne rotate_right
+# Fallback fuer Wrapper ohne rotate_right
 def _rotate_right(np_obj, steps=1):
     try:
         np_obj.rotate_right(steps)
@@ -71,6 +72,12 @@ def led_kranz_animation(np=led_kranz, log_path=None):
     if not _is_ready(np, log_path):
         return
     try:
+        def _feed():
+            try:
+                feed_watchdog(log_path)
+            except Exception:
+                pass
+
         # --- Rainbow Wipe ---
         for cycle in range(50):
             for i in range(NUM_LEDS):
@@ -79,6 +86,7 @@ def led_kranz_animation(np=led_kranz, log_path=None):
             np.show()
             time.sleep(0.02)
             _rotate_right(np)
+            _feed()
 
         # --- Chase Pulse ---
         for cycle in range(3):
@@ -88,6 +96,7 @@ def led_kranz_animation(np=led_kranz, log_path=None):
                 np.show()
                 time.sleep(0.05)
             time.sleep(0.1)
+            _feed()
 
         # --- Fading Tail ---
         for cycle in range(50):
@@ -100,6 +109,7 @@ def led_kranz_animation(np=led_kranz, log_path=None):
             np.show()
             time.sleep(0.01)
             _rotate_right(np)
+            _feed()
 
         # --- Flashing Green/Red ---
         for _ in range(3):
@@ -109,6 +119,7 @@ def led_kranz_animation(np=led_kranz, log_path=None):
             _safe_fill(np, 0, 255, 0)
             np.show()
             time.sleep(0.05)
+            _feed()
 
         # --- Red Alert Blink ---
         for _ in range(10):
@@ -118,6 +129,7 @@ def led_kranz_animation(np=led_kranz, log_path=None):
             _safe_fill(np, 0, 0, 0)
             np.show()
             time.sleep(0.03)
+            _feed()
 
     except Exception as e:
         log_message(log_path, "[LED] Fehler bei Animation: {}".format(str(e)))
@@ -161,6 +173,10 @@ def led_und_buzzer_blinken_rot(np=led_kranz, volume_percent=50, log_path=None):
         _safe_fill(np, 0, 0, 0)
         np.show()
         time.sleep(0.5)
+        try:
+            feed_watchdog(log_path)
+        except Exception:
+            pass
     paus(volume_percent)
 
 
@@ -177,6 +193,10 @@ def led_und_buzzer_blinken_und_aus(
         _safe_fill(np, 0, 0, 0)
         np.show()
         time.sleep(0.5)
+        try:
+            feed_watchdog(log_path)
+        except Exception:
+            pass
     if not nur_aus:
         paus(volume_percent)
 
@@ -198,7 +218,7 @@ def set_leds_based_on_mode(np, mode, first_red, volume_percent, log_path=None):
     if not _is_ready(np, log_path):
         return first_red
 
-    # Nur wichtige Modus-Änderungen loggen
+    # Nur wichtige Modus-aenderungen loggen
     if log_path and mode in ["red_blinking", "alarm_mode"]:
         log_important(log_path, "[LED] Wichtiger Modus: {}".format(mode))
 

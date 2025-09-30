@@ -2,7 +2,7 @@
 sdcard.py – SPI-Treiber für SD-/microSD-Karten (MicroPython)
 
 * 100 % API-kompatibel zu MicroPythons Original
-* Init robuster (größere Timeouts + mehrere CMD0-Versuche)
+* Init robuster (groessere Timeouts + mehrere CMD0-Versuche)
 * optionale Karten­typ-Abfrage (ioctl op==6)
 * universelle write()-/write_token()-Variante (keine SPI.read())
 """
@@ -29,7 +29,7 @@ class SDCard:
         self.spi, self.cs = spi, cs
         self.cmdbuf = bytearray(6)
         self.tokenbuf = bytearray(1)
-        self.dummybuf = bytes([0xFF]) * 512  # für write_readinto()
+        self.dummybuf = bytes([0xFF]) * 512  # fuer write_readinto()
 
         # CS-Pin vorbereiten, SPI auf Low-Speed
         self.cs.init(cs.OUT, value=1)
@@ -76,7 +76,7 @@ class SDCard:
         else:
             raise OSError("CMD8")
 
-        # ---------- Kapazität über CSD ermitteln ----------
+        # ---------- Kapazitaet ueber CSD ermitteln ----------
         if self._cmd(9, 0, 0, 0, False):
             raise OSError("CSD")
         csd = bytearray(16)
@@ -194,7 +194,7 @@ class SDCard:
         self.spi.write(b"\xff")
 
     # ------------------------------------------------------------------
-    # Öffentliche Block-API
+    # oeffentliche Block-API
     # ------------------------------------------------------------------
     def readblocks(self, block_num, buf):
         self.spi.write(b"\xff")

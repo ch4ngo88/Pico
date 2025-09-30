@@ -1,7 +1,7 @@
 import os
 import time
 import utime
-from machine import ADC, Pin, reset
+from machine import ADC, Pin
 
 from time_config import aktualisiere_zeit, synchronisiere_zeit
 from log_utils import log_message, log_important, log_once_per_day, log_alarm_event, log_config_change, log_startup
@@ -10,12 +10,14 @@ from sound_config import adjust_volume, fuer_elise
 from joystick import get_joystick_direction
 from power_management import should_display_be_on, is_display_manually_toggled
 from recovery_manager import init_recovery_system, feed_watchdog, check_system_health, activity_heartbeat
-from memory_monitor import monitor_memory, emergency_cleanup
+from memory_monitor import monitor_memory, emergency_cleanup, check_and_cleanup_low_memory
 from webserver_program import (
     start_webserver_and_show_ip,
     stop_webserver,
     handle_website_connection,
 )
+from recovery_manager import feed_watchdog
+from crash_guard import set_stage
 
 #-----------------------------------------------------------------
 # Globale Variablen / Defaults
@@ -28,7 +30,6 @@ sensor = ADC(4)
 weckzeiten = []
 weckstatus = []
 
-joystick_pressed_start = None
 reset_threshold = 2  # Sekunden
 last_minute = None
 last_sync_day = None
@@ -36,7 +37,7 @@ rtc_status_logged = False
 
 # Display-Toggle Steuerung
 display_toggle_enabled = True  # Global aktiviert/deaktiviert Display-Toggle
-last_menu_exit_time = 0  # Zeitpunkt des letzten Menü-Verlassens
+last_menu_exit_time = 0  # Zeitpunkt des letzten Menue-Verlassens
 
 # wird im run_clock_program() gesetzt, damit Helper auch ohne Param. loggen
 log_path_global = None
@@ -97,14 +98,14 @@ def reload_alarms(log_path):
     global weckzeiten, weckstatus
     try:
         new_alarms = lade_alarme_von_datei_new_format(log_path=log_path)
-        # Plausibilitätsprüfung
+        # Plausibilitaetspruefung
         if isinstance(new_alarms, list) and len(new_alarms) <= 10:  # Max 10 Alarme
             weckzeiten = new_alarms
             weckstatus = [False] * len(weckzeiten)
-            # Nur bei Start oder Änderung loggen
-            log_once_per_day(log_path, "Alarme geladen: {} Stück".format(len(weckzeiten)), time.localtime()[7])
+            # Nur bei Start oder aenderung loggen
+            log_once_per_day(log_path, "Alarme geladen: {} Stueck".format(len(weckzeiten)), time.localtime()[7])
         else:
-            log_important(log_path, "Ungültige Alarme-Datei, verwende Fallback")
+            log_important(log_path, "Ungueltige Alarme-Datei, verwende Fallback")
             weckzeiten = []
             weckstatus = []
     except Exception as e:
@@ -119,6 +120,17 @@ def show_cpu_temp_and_free_space(lcd, ladebalken_anzeigen_func=None, path="/sd")
         ladebalken_anzeigen_func(lcd, "System Monitor")
     
     try:
+        def _safe_sleep(sec):
+            # Schlaf stueckeln und Watchdog fuettern
+            import time as _t
+            end = _t.time() + sec
+            while _t.time() < end:
+                _t.sleep(0.5)
+                try:
+                    feed_watchdog(log_path_global)
+                except Exception:
+                    pass
+        
         temp_c = read_cpu_temperature()
         free_space = get_sd_card_free_space(path)
         
@@ -128,6 +140,10 @@ def show_cpu_temp_and_free_space(lcd, ladebalken_anzeigen_func=None, path="/sd")
         
         if lcd:
             # Seite 1: CPU & SD
+            try:
+                set_stage("sysmon:page1", log_path_global)
+            except Exception:
+                pass
             lcd.clear()
             lcd.putstr("CPU: {:.1f}C".format(temp_c))
             lcd.move_to(0, 1)
@@ -135,14 +151,28 @@ def show_cpu_temp_and_free_space(lcd, ladebalken_anzeigen_func=None, path="/sd")
                 lcd.putstr("SD: {:.1f}MB".format(free_space))
             else:
                 lcd.putstr("SD: Error")
-            time.sleep(3)
+            _safe_sleep(3)
             
             # Seite 2: Memory 
+            try:
+                set_stage("sysmon:page2", log_path_global)
+            except Exception:
+                pass
             lcd.clear()
             lcd.putstr("RAM: {}KB frei".format(mem_stats['free']//1024))
             lcd.move_to(0, 1)
             lcd.putstr("Cleanup: {} mal".format(mem_stats['gc_count']))
-            time.sleep(3)
+            # kuerzerer Schlaf mit haeufigerem WDT-Feed, um Timeouts zu vermeiden
+            def _short_safe_sleep(total):
+                import time as _t
+                end = _t.time() + total
+                while _t.time() < end:
+                    _t.sleep(0.25)
+                    try:
+                        feed_watchdog(log_path_global)
+                    except Exception:
+                        pass
+            _short_safe_sleep(3)
             
             lcd.clear()
             hour, minute, _, aktueller_tag, _, _, _ = aktualisiere_zeit()
@@ -153,6 +183,10 @@ def show_cpu_temp_and_free_space(lcd, ladebalken_anzeigen_func=None, path="/sd")
                 hour,
                 minute,
             )
+            try:
+                feed_watchdog(log_path_global)
+            except Exception:
+                pass
     except Exception as e:
         log_message(log_path_global, "[System Monitor Fehler] {}".format(str(e)))
         if lcd:
@@ -188,7 +222,7 @@ def get_sd_card_free_space(path="/sd"):
         log_message(log_path_global, "[SD Speicher Fehler] {}".format(str(e)))
         return None
 
-# Globale Variablen für SD-Diagnostics-Throttling
+# Globale Variablen fuer SD-Diagnostics-Throttling
 _last_sd_diag_time = 0
 _sd_diag_interval = 3600  # 1 Stunde
 
@@ -223,7 +257,7 @@ def _log_sd_diagnostics_limited(stats, path):
         try:
             sd_files = os.listdir(path)
             file_count = len(sd_files)
-            log_message(log_path_global, "SD-Dateien: {} Stück".format(file_count))
+            log_message(log_path_global, "SD-Dateien: {} Stueck".format(file_count))
         except Exception as e:
             log_message(log_path_global, "SD-Listing Fehler: {}".format(str(e)))
             
@@ -245,7 +279,7 @@ def update_display(lcd, wochentage, aktueller_tag, hour, minute):
         return
     
     try:
-        # Plausibilitätsprüfung
+        # Plausibilitaetspruefung
         if not (0 <= hour <= 23 and 0 <= minute <= 59):
             return
         if not (0 <= aktueller_tag < len(wochentage)):
@@ -280,7 +314,7 @@ def update_leds_based_on_time(np, hour, minute):
         return
     
     try:
-        # Plausibilitätsprüfung der Eingabewerte
+        # Plausibilitaetspruefung der Eingabewerte
         if not (0 <= hour <= 23 and 0 <= minute <= 59):
             return
             
@@ -321,10 +355,10 @@ def check_alarm(hour, minute, aktueller_tag, weckzeiten, weckstatus, log_path):
         if abs(alarm_minuten - aktuelle_minuten) <= 1:
             return index, text
 
-    # Verpasste Alarme nur loggen, wenn sie noch nicht ausgelöst wurden
+    # Verpasste Alarme nur loggen, wenn sie noch nicht ausgeloest wurden
     for index, (w_h, w_m, text, tage) in enumerate(weckzeiten):
         if weckstatus[index]:
-            continue  # wurde ausgelöst oder ignoriert
+            continue  # wurde ausgeloest oder ignoriert
         if tag_name not in tage:
             continue
         alarm_minuten = w_h * 60 + w_m
@@ -353,17 +387,17 @@ def alarm_ausloesen(np, lcd, volume, text, idx=None, log_path=None):
             log_alarm_event(log_path, "Alarm manuell beendet - Index {}, Text: {}".format(idx, text))
 
     def emergency_cleanup():
-        """Garantierte Aufräumung bei Alarm-Ende"""
+        """Garantierte Aufraeumung bei Alarm-Ende"""
         nonlocal cleanup_done
         if cleanup_done:
             return
             
         try:
-            # Display zurücksetzen
+            # Display zuruecksetzen
             if lcd:
                 lcd.clear()
             
-            # LEDs zurücksetzen
+            # LEDs zuruecksetzen
             if np:
                 try:
                     np.fill(0, 0, 0)
@@ -407,7 +441,7 @@ def alarm_ausloesen(np, lcd, volume, text, idx=None, log_path=None):
         while sc.alarm_flag and (utime.time() - start_time) < 900:
             current_time = utime.ticks_ms()
             
-            # Watchdog-Fütterung alle 100 Loop-Iterationen (verhindert Reset-Loops)
+            # Watchdog-Fuetterung alle 100 Loop-Iterationen (verhindert Reset-Loops)
             loop_iterations += 1
             if loop_iterations % 100 == 0:
                 feed_watchdog(log_path)
@@ -438,12 +472,12 @@ def alarm_ausloesen(np, lcd, volume, text, idx=None, log_path=None):
     except Exception as e:
         log_message(log_path, "[Alarm Fehler] {}".format(str(e)))
     finally:
-        # GARANTIERTE Aufräumung - egal was passiert!
+        # GARANTIERTE Aufraeumung - egal was passiert!
         emergency_cleanup()
 
 
 def _setup_alarm_display(lcd, text):
-    """Memory-sichere Display-Konfiguration für Alarm"""
+    """Memory-sichere Display-Konfiguration fuer Alarm"""
     if not lcd or not text:
         return
         
@@ -474,7 +508,7 @@ def _setup_alarm_display(lcd, text):
 
 
 def _handle_alarm_leds(np, cycle):
-    """Memory-sichere LED-Behandlung für Alarm"""
+    """Memory-sichere LED-Behandlung fuer Alarm"""
     if not np:
         return
         
@@ -553,7 +587,7 @@ def toggle_led_status(np, lcd, status, hour, minute, led=None, blue_led=None):
 # Haupt-Schleife
 # --------------------------------------------------------------------
 def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=None, led=None, blue_led=None):
-    global last_minute, last_sync_day, joystick_pressed_start, log_path_global
+    global last_minute, last_sync_day, log_path_global
     global weckstatus, weckzeiten, rtc_status_logged, display_toggle_enabled, last_menu_exit_time
 
     log_path_global = log_path
@@ -600,14 +634,17 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                 if s:
                     webserver_running = True
                     log_startup(log_path, "Webserver gestartet: {}".format(ip))
+                    # Kein Web-LED-Toggle mehr
                 else:
                     webserver_running = False
             else:
-                log_message(log_path, "[Webserver] WLAN nicht verfügbar")
+                log_message(log_path, "[Webserver] WLAN nicht verfuegbar")
         except Exception as e:
             webserver_running = False
             s = None
             log_message(log_path, "[Webserver Start Fehler] {}".format(str(e)))
+
+    # _web_toggle_leds entfernt – keine Websteuerung der LEDs
 
     def stop_webserver_func():
         nonlocal s, webserver_running
@@ -639,8 +676,8 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
         try:
             menumode = False
             volume_mode = False 
-            display_toggle_enabled = True  # Display-Toggle nach Menü wieder aktivieren
-            last_menu_exit_time = time.time()  # Merken wann Menü verlassen wurde
+            display_toggle_enabled = True  # Display-Toggle nach Menue wieder aktivieren
+            last_menu_exit_time = time.time()  # Merken wann Menue verlassen wurde
             if lcd:
                 hour, minute, _, aktueller_tag, _, _, _ = aktualisiere_zeit()
                 update_display(lcd, wochentage, aktueller_tag, hour, minute)
@@ -652,7 +689,7 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
     # Hauptschleife mit garantierter Cleanup
     try:
         while True:
-            # Watchdog regelmäßig füttern (alle Schleifendurchläufe)
+            # Watchdog regelmaessig fuettern (alle Schleifendurchlaeufe)
             feed_watchdog(log_path)
             
             try:
@@ -683,16 +720,17 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                 menu_last_interaction = time.time() 
                 activity_heartbeat()  # System ist aktiv
 
-                # BASIS-MODUS: Links/Rechts = Volume, Oben/Unten = Menü
+                # BASIS-MODUS: Links/Rechts = Volume, Oben/Unten = Menue
                 if not menumode:
-                    if direction in ("up", "down"):
-                        menumode = True
-                        menu_index = 0
-                        display_toggle_enabled = False  # Display-Toggle während Menü deaktivieren
-                        time.sleep(0.3)  # Verhindert ungewollten Doppelsprung
-                    elif direction in ("left", "right"):
+                    # WICHTIG: Wenn Volume-Mode aktiv ist, Up/Down NICHT ins Menue lassen
+                    if direction in ("left", "right"):
                         # Volume-Steuerung (wird weiter unten behandelt)
                         pass
+                    elif not volume_mode and direction in ("up", "down"):
+                        menumode = True
+                        menu_index = 0
+                        display_toggle_enabled = False  # Display-Toggle waehrend Menue deaktivieren
+                        time.sleep(0.3)  # Verhindert ungewollten Doppelsprung
 
                 elif menumode:
                     if direction == "up":
@@ -711,12 +749,12 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                             test_program(lcd, np, wlan, log_path, volume)
                             test_running = False
                             start_webserver()
-                            zuruck_zur_uhranzeige()  # Korrekte Menü-Verlassen Behandlung
+                            zuruck_zur_uhranzeige()  # Korrekte Menue-Verlassen Behandlung
 
                         elif eintrag.startswith("2."):
                             show_cpu_temp_and_free_space(lcd, ladebalken_anzeigen_func)
                             lcd.clear()
-                            zuruck_zur_uhranzeige()  # Korrekte Menü-Verlassen Behandlung
+                            zuruck_zur_uhranzeige()  # Korrekte Menue-Verlassen Behandlung
 
                         elif eintrag.startswith("3."):
                             power_mode_active = not power_mode_active
@@ -739,13 +777,13 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                                     lcd.move_to(0, 1)
                                     lcd.putstr("LEDs: Normal")
                                 if np:
-                                    np.brightness(current_brightness)  # Zurück zu normal
+                                    np.brightness(current_brightness)  # Zurueck zu normal
                                     if leds_auto_update:
                                         update_leds_based_on_time(np, hour, minute)
                                 log_important(log_path, "[Power Modus] LEDs auf Normal")
                             
                             time.sleep(2)
-                            zuruck_zur_uhranzeige()  # Korrekte Menü-Verlassen Behandlung
+                            zuruck_zur_uhranzeige()  # Korrekte Menue-Verlassen Behandlung
 
                         elif eintrag.startswith("4."):
                             if lcd:
@@ -755,7 +793,7 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                                 lcd.putstr(wlan.ifconfig()[0] if wlan else "Keine Verb.")
                                 time.sleep(4)
                                 lcd.clear()
-                            zuruck_zur_uhranzeige()  # Korrekte Menü-Verlassen Behandlung
+                            zuruck_zur_uhranzeige()  # Korrekte Menue-Verlassen Behandlung
 
                         elif eintrag.startswith("5."):
                             if lcd:
@@ -767,7 +805,11 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                                     np.fill((0, 0, 0))
                                 np.show()
                             time.sleep(0.5)
-                            reset()
+                            try:
+                                _mp_reset = __import__('machine').reset
+                                _mp_reset()
+                            except Exception:
+                                pass
 
             if menumode and lcd:
                 lcd.clear()
@@ -780,7 +822,7 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
             if menumode and time.time() - menu_last_interaction > menu_timeout:
                 if lcd:
                     lcd.clear()
-                zuruck_zur_uhranzeige()  # Korrekte Menü-Verlassen Behandlung
+                zuruck_zur_uhranzeige()  # Korrekte Menue-Verlassen Behandlung
 
             if not menumode:
                 if direction in ("left", "right"):
@@ -809,13 +851,13 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                     zuruck_zur_uhranzeige()
                     
                 elif direction == "press" and not volume_mode and not menumode:
-                    # Display Toggle NUR wenn nicht im Menü-Modus UND genug Zeit seit Menü-Verlassen vergangen
+                    # Display Toggle NUR wenn nicht im Menue-Modus UND genug Zeit seit Menue-Verlassen vergangen
                     current_time = time.time()
                     if display_toggle_enabled and (current_time - last_menu_exit_time) > 1.0:
                         leds_auto_update = not leds_auto_update
                         toggle_led_status(np, lcd, leds_auto_update, hour, minute, led, blue_led)
                         log_message(log_path, "Display Toggle: {}".format("AN" if leds_auto_update else "AUS"))
-                    # Ignorieren wenn im Menü oder kurz nach Menü-Verlassen
+                    # Ignorieren wenn im Menue oder kurz nach Menue-Verlassen
 
             if webserver_running:
                 try:
@@ -853,13 +895,13 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                     f.write("-" * 40 + "\n\n")
                 log_once_per_day(log_path, "Alarm-Reset fuer neuen Tag: RTC-Tag = {}, last_sync_day = {}".format(day, last_sync_day), day)
 
-            # Display Management (alle 60 Sekunden prüfen)
+            # Display Management (alle 60 Sekunden pruefen)
             try:
                 now = time.time()
                 if now - last_display_check > 60:  # Alle 60 Sekunden
                     should_be_on, target_brightness = should_display_be_on(hour, minute, log_path)
                     
-                    # Display Ein/Aus ändern wenn nötig
+                    # Display Ein/Aus aendern wenn noetig
                     if should_be_on != current_display_state:
                         current_display_state = should_be_on
                         if lcd:
@@ -876,7 +918,7 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                         
                         log_important(log_path, "[Auto Display] {} um {:02d}:{:02d}".format('AN' if should_be_on else 'AUS', hour, minute))
                     
-                    # Helligkeit anpassen wenn nötig (aber nicht wenn Power Modus aktiv)
+                    # Helligkeit anpassen wenn noetig (aber nicht wenn Power Modus aktiv)
                     if target_brightness != current_brightness and np and not power_mode_active:
                         current_brightness = target_brightness
                         np.brightness(current_brightness)
@@ -897,7 +939,7 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                 except Exception as e:
                     log_message(log_path, "[Minuten-Update Fehler] {}".format(str(e)))
 
-            # --- NEU: Sekundenparität statt eigener Stoppuhr -----------------
+            # --- NEU: Sekundenparitaet statt eigener Stoppuhr -----------------
             if lcd and not menumode and not volume_mode:
                 try:
                     pos = ((16 - (len(wochentage[aktueller_tag % 7]) + 1 + 5)) // 2
@@ -920,16 +962,12 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                     
                     # Memory-Check alle 3 Minuten (optimiert von 5 Min)
                     if current_time % 180 == 0:
-                        feed_watchdog(log_path)  # Watchdog vor Memory-Ops füttern
+                        feed_watchdog(log_path)  # Watchdog vor Memory-Ops fuettern
                         free_mem = monitor_memory(log_path, context="main_loop_check")
-                        
-                        # Notfall-Cleanup bei kritischem Speichermangel
-                        if free_mem < 8192:  # Weniger als 8KB - Notfall
-                            log_message(log_path, "[EMERGENCY] Kritischer Speichermangel: {}KB frei!".format(
-                                free_mem//1024), force=True)
-                            feed_watchdog(log_path)
-                            emergency_cleanup(log_path)
-                            feed_watchdog(log_path)
+                        # Sanftes Low-Memory-Handling mit Cooldown statt haeufigen Notfall-Cleanups
+                        if free_mem < 12288:  # frueher ansetzen, aber schonend reagieren
+                            free_mem = check_and_cleanup_low_memory(log_path, threshold=8192, cooldown_s=600)
+                        feed_watchdog(log_path)
                 
 
                             
@@ -944,7 +982,7 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
         log_message(log_path, "[Hauptschleife Kritischer Fehler] {}".format(str(e)))
     finally:
         # Garantierte Cleanup bei Programmende
-        log_message(log_path, "[System] Cleanup wird ausgeführt...", force=True)
+        log_message(log_path, "[System] Cleanup wird ausgefuehrt...", force=True)
         try:
             stop_webserver_func()
         except Exception as e:

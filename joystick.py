@@ -45,30 +45,34 @@ _DEBOUNCE_MS = 10
 # -------------------------------------------------------------------
 def get_joystick_direction():
     """
-    Gibt 'left', 'right', 'up', 'down', 'press' oder None zurück.
-    Robuste Version mit Fehlerbehandlung und Plausibilitätsprüfung.
+    Gibt 'left', 'right', 'up', 'down', 'press' oder None zurueck.
+    Robuste Version mit Fehlerbehandlung und Plausibilitaetspruefung.
     """
     global _last_sw_state, _last_sw_change
 
     try:
-        # ---------- Taster zuerst (sonst Prellen + Kipp-Fehler) ----------
+        # ---------- Taster zuerst (Edge-basiert, kein Dauer-Repeat) ----------
         sw_now = _sw.value()
+        now_ms = utime.ticks_ms()
         if sw_now != _last_sw_state:
-            _last_sw_change = utime.ticks_ms()
-            _last_sw_state = sw_now
-        else:
-            if (
-                sw_now == 0
-                and utime.ticks_diff(utime.ticks_ms(), _last_sw_change) > _DEBOUNCE_MS
-            ):
+            # Zustandswechsel erkannt
+            if sw_now == 0 and utime.ticks_diff(now_ms, _last_sw_change) > _DEBOUNCE_MS:
+                # Flanke: High -> Low nach Debounce => genau EIN "press"
+                _last_sw_change = now_ms
+                _last_sw_state = sw_now
                 return "press"
+            else:
+                # Nur Zustand aktualisieren, kein Event
+                _last_sw_change = now_ms
+                _last_sw_state = sw_now
+        # Kein Event bei gehaltenem Taster
 
         # ---------- Achsen mit Robustheit ----------
         try:
             x = _vrx.read_u16()
             y = _vry.read_u16()
             
-            # Plausibilitätsprüfung (ADC sollte 0-65535 sein)
+            # Plausibilitaetspruefung (ADC sollte 0-65535 sein)
             if not (0 <= x <= 65535 and 0 <= y <= 65535):
                 return None
                 
@@ -79,7 +83,7 @@ def get_joystick_direction():
         dx = x - _CENTER_X
         dy = y - _CENTER_Y
 
-        # Priorität: größere Abweichung gewinnt
+        # Prioritaet: groessere Abweichung gewinnt
         if abs(dx) > _THRESHOLD and abs(dx) > abs(dy):
             return "left" if dx < 0 else "right"
         if abs(dy) > _THRESHOLD:

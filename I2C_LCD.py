@@ -17,7 +17,7 @@ def sleep_ms(ms):
 
 
 class I2CLcd(LcdApi):
-    """HAL-Klasse für HD44780 über PCF8574 (LCD1602/2004)."""
+    """HAL-Klasse fuer HD44780 ueber PCF8574 (LCD1602/2004)."""
 
     # --------------------------------------------------------------
     #   Initialisierung
@@ -42,7 +42,7 @@ class I2CLcd(LcdApi):
         # Basisklasse initialisieren
         super().__init__(num_lines, num_columns)
 
-        # 2-Zeilen-Flag, falls nötig
+        # 2-Zeilen-Flag, falls noetig
         cmd = self.LCD_FUNCTION
         if num_lines > 1:
             cmd |= self.LCD_FUNCTION_2LINES
@@ -63,7 +63,7 @@ class I2CLcd(LcdApi):
     #   Low-Level-Writes
     # --------------------------------------------------------------
     def _write(self, byte):
-        """I²C-Write mit einfachem OSError-Catch (Bus hängt)."""
+        """I²C-Write mit einfachem OSError-Catch (Bus haengt)."""
         try:
             self.i2c.writeto(self.i2c_addr, bytearray([byte]))
         except OSError:
@@ -72,7 +72,7 @@ class I2CLcd(LcdApi):
             self.i2c.writeto(self.i2c_addr, bytearray([byte]))
 
     def _hal_write_init_nibble(self, nibble):
-        """Nur während des Resets verwendet."""
+        """Nur waehrend des Resets verwendet."""
         byte = (((nibble >> 4) & 0x0F) << SHIFT_DATA) | (
             self.backlight << SHIFT_BACKLIGHT
         )
@@ -80,7 +80,7 @@ class I2CLcd(LcdApi):
         self._write(byte)
 
     # --------------------------------------------------------------
-    #   Öffentliche HAL-Funktionen für LcdApi
+    #   oeffentliche HAL-Funktionen fuer LcdApi
     # --------------------------------------------------------------
     def hal_write_command(self, cmd):
         high = (((cmd >> 4) & 0x0F) << SHIFT_DATA) | (self.backlight << SHIFT_BACKLIGHT)

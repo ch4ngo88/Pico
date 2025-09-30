@@ -70,8 +70,8 @@ def _time_to_minutes(time_str):
 # --------------------------------------------------------------------
 def should_display_be_on(current_hour, current_minute, log_path=None):
     """
-    Überprüft basierend auf den Einstellungen, ob das Display an sein soll.
-    Gibt (should_be_on: bool, brightness: int) zurück.
+    ueberprueft basierend auf den Einstellungen, ob das Display an sein soll.
+    Gibt (should_be_on: bool, brightness: int) zurueck.
     """
     try:
         settings = _load_settings()
@@ -87,7 +87,7 @@ def should_display_be_on(current_hour, current_minute, log_path=None):
         # Normale Zeit (on < off)
         if on_minutes < off_minutes:
             is_on_time = on_minutes <= current_minutes < off_minutes
-        # Über Mitternacht (on > off, z.B. 22:00 bis 07:00)
+        # ueber Mitternacht (on > off, z.B. 22:00 bis 07:00)
         else:
             is_on_time = current_minutes >= on_minutes or current_minutes < off_minutes
         
@@ -104,8 +104,8 @@ def should_display_be_on(current_hour, current_minute, log_path=None):
 
 
 def is_display_manually_toggled():
-    """Prüft ob Display manuell umgeschaltet wurde (für Menü-Toggle)"""
-    return True  # Für jetzt immer erlauben
+    """Prueft ob Display manuell umgeschaltet wurde (fuer Menue-Toggle)"""
+    return True  # Fuer jetzt immer erlauben
 
 
 def reload_settings():

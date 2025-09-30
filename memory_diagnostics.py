@@ -103,7 +103,7 @@ def diagnose_lcd_memory(log_path=None):
         # Simuliere LCD-Strings
         display_strings = [
             "Aktuelle Zeit: 14:25",
-            "Nächster Alarm: 07:00",
+            "Naechster Alarm: 07:00",
             "Temperatur: 22.5°C",
             "Status: OK"
         ]
@@ -126,7 +126,7 @@ def diagnose_lcd_memory(log_path=None):
 
 
 def run_comprehensive_memory_diagnosis(log_path=None):
-    """Führt vollständige Speicher-Diagnose durch"""
+    """Fuehrt vollstaendige Speicher-Diagnose durch"""
     from log_utils import log_message
     
     log_message(log_path, "=== SPEICHER-DIAGNOSE GESTARTET ===", force=True)
@@ -192,8 +192,8 @@ def diagnose_boot_memory_loss(log_path=None):
         gc.collect()
         measurements.append(("Pin erstellt", gc.mem_free()))
         
-        # String-Operationen (typisch für LCD/Log)
-        big_string = "Alarm: " + "Test" * 100  # Simuliert große Log-Messages
+        # String-Operationen (typisch fuer LCD/Log)
+        big_string = "Alarm: " + "Test" * 100  # Simuliert grosse Log-Messages
         gc.collect()
         measurements.append(("String-Ops", gc.mem_free()))
         

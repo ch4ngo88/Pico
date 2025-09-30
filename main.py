@@ -13,6 +13,7 @@ from neopixel import myNeopixel
 from time_config import synchronisiere_zeit
 import joystick
 from webserver_program import set_reload_alarms_callback
+from crash_guard import check_previous_crash, clear_stage
 
 
 # --------------------------------------------------------------------------
@@ -89,7 +90,7 @@ def connect_to_wifi_from_file(lcd, log_path, max_attempts=3):
 def hard_reset_hardware_state(np, led, blue_led, lcd=None, sound_off_fn=None, log_path=None):
     """
     Setzt das gesamte System in einen definierten Grundzustand.
-    Alles aus, alles auf False. Robuste Fehlerbehandlung für langfristigen Betrieb.
+    Alles aus, alles auf False. Robuste Fehlerbehandlung fuer langfristigen Betrieb.
     """
     reset_errors = []
     
@@ -113,7 +114,7 @@ def hard_reset_hardware_state(np, led, blue_led, lcd=None, sound_off_fn=None, lo
                 except Exception as e:
                     reset_errors.append(led_name + ": " + str(e))
 
-        # LCD sicher zurücksetzen
+        # LCD sicher zuruecksetzen
         if lcd:
             for action_name, action in [("LCD Clear", lambda: lcd.clear()), 
                                       ("LCD Backlight", lambda: lcd.backlight_off())]:
@@ -127,7 +128,7 @@ def hard_reset_hardware_state(np, led, blue_led, lcd=None, sound_off_fn=None, lo
         if sound_off_fn:
             for attempt in range(2):
                 try:
-                    sound_off_fn(50)  # volume_percent Parameter hinzugefügt
+                    sound_off_fn(50)  # volume_percent Parameter hinzugefuegt
                     break
                 except Exception as e:
                     if attempt == 1:
@@ -141,9 +142,9 @@ def hard_reset_hardware_state(np, led, blue_led, lcd=None, sound_off_fn=None, lo
         except Exception as e:
             reset_errors.append("Joystick: " + str(e))
 
-        # System-State zurücksetzen (nur bei explizitem Request)
+        # System-State zuruecksetzen (nur bei explizitem Request)
         # NOTE: Status flags werden in main() explizit initialisiert
-        # Diese Funktion setzt nur Hardware zurück, keine Software-Flags
+        # Diese Funktion setzt nur Hardware zurueck, keine Software-Flags
 
         # Nur kritische Fehler loggen
         if reset_errors:
@@ -156,7 +157,7 @@ def hard_reset_hardware_state(np, led, blue_led, lcd=None, sound_off_fn=None, lo
 
 
 def mount_sd_card(lcd, spi, cs, sd_path="/sd", led=None):
-    # Mehrere Versuche für SD-Mount (oft instabil beim Boot)
+    # Mehrere Versuche fuer SD-Mount (oft instabil beim Boot)
     for attempt in range(3):
         try:
             if "sd" not in os.listdir("/"):
@@ -180,7 +181,7 @@ def mount_sd_card(lcd, spi, cs, sd_path="/sd", led=None):
                     f.write("#" * 40 + "\n\n")
                 log_message(log_path, "SD-Karte erfolgreich gemountet.")
             
-            # Interne LED AN (nur wenn Parameter übergeben)
+            # Interne LED AN (nur wenn Parameter uebergeben)
             if led:
                 try:
                     led.value(1)
@@ -190,7 +191,7 @@ def mount_sd_card(lcd, spi, cs, sd_path="/sd", led=None):
             return log_path
 
         except Exception as e:
-            if attempt < 2:  # Noch Versuche übrig
+            if attempt < 2:  # Noch Versuche uebrig
                 if lcd:
                     lcd.clear()
                     lcd.putstr("SD Versuch {}/3".format(attempt + 1))
@@ -243,12 +244,12 @@ def zaehle_aktive_alarme(pfad="/sd/alarm.txt", retries=5, delay=0.2, log_path=No
 
 def teste_joystick(repeats=100, max_dev=6000, log_path=None):
     """
-    Kurzer Selbsttest für den Joystick.
+    Kurzer Selbsttest fuer den Joystick.
 
     - misst 'repeats' Samples (≈0,5 s)
     - akzeptiert eine max. Abweichung 'max_dev' (Default 6000 ≈ 9 % ADC-Range)
     - Button muss die ganze Zeit HIGH bleiben
-    - gibt True/False zurück
+    - gibt True/False zurueck
     """
     try:
         x_vals, y_vals, sw_vals = [], [], []
@@ -258,7 +259,7 @@ def teste_joystick(repeats=100, max_dev=6000, log_path=None):
             x_vals.append(joystick._vrx.read_u16())
             y_vals.append(joystick._vry.read_u16())
             sw_vals.append(joystick._sw.value())
-            time.sleep(0.005)  # ≈200 Hz, genügt locker
+            time.sleep(0.005)  # ≈200 Hz, genuegt locker
 
         # Mittelwert und max. Abweichung ermitteln
         mean_x = sum(x_vals) // repeats
@@ -313,7 +314,7 @@ def main():
     blue_led.value(0)
     
     
-    # Sound Reset: Nicht nötig beim Boot da PWM schon aus ist
+    # Sound Reset: Nicht noetig beim Boot da PWM schon aus ist
     # KEIN paus() aufrufen - das ist eine Melodie!
     sound_off_function = None
     
@@ -322,7 +323,7 @@ def main():
         np=np,
         led=led,
         blue_led=blue_led,
-        lcd=None,  # LCD noch nicht verfügbar
+        lcd=None,  # LCD noch nicht verfuegbar
         sound_off_fn=sound_off_function,
         log_path=None  # kein Logfile zu dem Zeitpunkt – Konsole only
     )
@@ -352,22 +353,13 @@ def main():
 
         # SD erfolgreich gemountet - zeige Status an
         if sd_ok:
-            # Freien Speicher ermitteln - bewährte Formel verwenden
+            # Freien Speicher ermitteln (kompakt loggen)
             try:
                 statvfs = os.statvfs("/sd")
-                
-                # TEMPORÄRER DEBUG für SD-Problem
-                if log_path:
-                    debug_info = "statvfs debug: [0]={} [1]={} [2]={} [3]={}".format(
-                        statvfs[0], statvfs[1], statvfs[2], statvfs[3])
-                    log_message(log_path, debug_info)
-                    
-                    total_sectors = statvfs[2]  # f_blocks
-                    sector_size = statvfs[1]    # f_frsize  
-                    total_gb = (total_sectors * sector_size) / (1024 * 1024 * 1024)
-                    log_message(log_path, "Berechnete SD-Groesse: {:.2f} GB".format(total_gb))
-                
                 free_mb = statvfs[3] * statvfs[1] / (1024 * 1024)  # Wie im Systemmonitor
+                if log_path:
+                    log_message(log_path, "SD frei: {:.1f} MB (f_bavail={}, f_frsize={})".format(
+                        free_mb, statvfs[3], statvfs[1]))
                 
                 if lcd:
                     lcd.clear()
@@ -391,6 +383,10 @@ def main():
                 f.write("\n" + "#" * 40 + "\n")
                 f.write(log_timestamp + " - SYSTEMSTART\n")
                 f.write("#" * 40 + "\n\n")
+            try:
+                check_previous_crash(log_path)
+            except Exception:
+                pass
             log_message(log_path, "=== Systemstart: Uhr wird initialisiert ===")
 
     except Exception as e:
@@ -533,13 +529,17 @@ def main():
     # ---------- Hauptprogramm ----------
     log_message(log_path, "Hauptprogramm wird gestartet.")
     try:
+        clear_stage(log_path)
+    except Exception:
+        pass
+    try:
         set_reload_alarms_callback(lambda: reload_alarms(log_path))
         time.sleep(0.2)
 
         run_clock_program(lcd, np, wlan, log_path, ladebalken_anzeigen, led, blue_led)
     except Exception as e:
         log_message(log_path, "[Hauptprogramm Fehler] " + str(e))
-        # Bei kritischem Fehler: Status-Report für Debugging
+        # Bei kritischem Fehler: Status-Report fuer Debugging
         log_message(log_path, "Status bei Fehler: " + " ".join(status_summary), force=True)
 
 if __name__ == "__main__":

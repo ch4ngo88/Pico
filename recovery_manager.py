@@ -9,7 +9,7 @@ from log_utils import log_important
 _last_activity = 0
 _recovery_active = False
 _wdt = None
-_WATCHDOG_TIMEOUT = 8000   # 8 Sekunden (Maximum für Pico - 8388ms Limit)
+_WATCHDOG_TIMEOUT = 8000   # 8 Sekunden (Maximum fuer Pico - 8388ms Limit)
 
 
 # --------------------------------------------------------------------
@@ -29,7 +29,7 @@ def init_recovery_system(log_path=None):
 
 
 def feed_watchdog(log_path=None):
-    """Füttert den Watchdog - zeigt dass das System läuft"""
+    """Fuettert den Watchdog - zeigt dass das System laeuft"""
     global _wdt, _last_activity
     try:
         if _wdt:
@@ -41,8 +41,8 @@ def feed_watchdog(log_path=None):
 
 def check_system_health(log_path=None):
     """
-    Überprüft die Systemgesundheit.
-    Führt sanften Reset durch wenn nötig.
+    ueberprueft die Systemgesundheit.
+    Fuehrt sanften Reset durch wenn noetig.
     """
     global _last_activity, _recovery_active
     
@@ -52,9 +52,9 @@ def check_system_health(log_path=None):
     try:
         now = time.time()
         
-        # Mehr als 5 Minuten keine Aktivität? 
+        # Mehr als 5 Minuten keine Aktivitaet? 
         if now - _last_activity > 300:
-            log_important(log_path, "[Recovery] System scheint zu hängen - sanfter Reset")
+            log_important(log_path, "[Recovery] System scheint zu haengen - sanfter Reset")
             _recovery_active = True
             
             # Kurze Pause dann Reset
@@ -69,17 +69,17 @@ def check_system_health(log_path=None):
 
 
 def emergency_recovery(log_path=None):
-    """Notfall-Recovery wenn alles andere fehlschlägt"""
+    """Notfall-Recovery wenn alles andere fehlschlaegt"""
     try:
-        log_important(log_path, "[Recovery] NOTFALL-RECOVERY ausgeführt")
+        log_important(log_path, "[Recovery] NOTFALL-RECOVERY ausgefuehrt")
         time.sleep(1)
         reset()
     except Exception:
-        # Wenn selbst das fehlschlägt, können wir nichts mehr tun
+        # Wenn selbst das fehlschlaegt, koennen wir nichts mehr tun
         pass
 
 
 def activity_heartbeat():
-    """Aktualisiert die letzte Aktivitätszeit"""
+    """Aktualisiert die letzte Aktivitaetszeit"""
     global _last_activity
     _last_activity = time.time()

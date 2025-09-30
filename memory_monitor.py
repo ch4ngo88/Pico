@@ -7,20 +7,23 @@ from log_utils import log_message, log_once_per_day
 # --------------------------------------------------------------------
 _last_gc_time = 0
 _gc_counter = 0
-_memory_history = []  # Speicher-Verlauf für Diagnose
+_memory_history = []  # Speicher-Verlauf fuer Diagnose
 _boot_memory = None   # Speicher direkt nach Boot
 _max_history = 30     # Behalte letzte 30 Messungen
+_low_strikes = 0      # aufeinanderfolgende Low-Memory-Treffer
+_last_emergency_ts = 0
 
 def record_boot_memory():
-    """Speichere Speicher direkt nach Boot für Vergleich"""
+    """Speichere Speicher direkt nach Boot fuer Vergleich"""
     global _boot_memory
     if _boot_memory is None:
         _boot_memory = gc.mem_free()
-        log_message(None, "[Memory Diagnose] Boot-Speicher: {} bytes".format(_boot_memory), force=True)
+        # Notiz: Nicht in die Konsole loggen, wenn noch kein Logfile existiert.
+        # Der erste echte Log-Aufruf erfolgt spaeter mit log_path.
 
 
 def _add_memory_sample(free_mem, context=""):
-    """Fügt Speicher-Sample zur Historie hinzu"""
+    """Fuegt Speicher-Sample zur Historie hinzu"""
     global _memory_history, _max_history
     import time
     
@@ -40,7 +43,7 @@ def analyze_memory_trend(log_path=None):
     if len(_memory_history) < 5:
         return
     
-    # Berechne Speicher-Verlust über Zeit
+    # Berechne Speicher-Verlust ueber Zeit
     first = _memory_history[0]
     last = _memory_history[-1]
     time_diff = last['time'] - first['time']
@@ -50,10 +53,10 @@ def analyze_memory_trend(log_path=None):
         leak_rate = memory_diff / time_diff  # bytes per second
         
         if leak_rate < -10:  # Mehr als 10 bytes/sec Verlust
-            log_message(log_path, "[Memory LEAK DETECTED] {:.1f} bytes/sec Verlust über {:.1f}min".format(
+            log_message(log_path, "[Memory LEAK DETECTED] {:.1f} bytes/sec Verlust ueber {:.1f}min".format(
                 leak_rate, time_diff/60), force=True)
             
-            # Finde größten Sprung
+            # Finde groessten Sprung
             max_drop = 0
             drop_context = ""
             for i in range(1, len(_memory_history)):
@@ -63,13 +66,13 @@ def analyze_memory_trend(log_path=None):
                     drop_context = _memory_history[i]['context']
             
             if max_drop > 2048:
-                log_message(log_path, "[Memory] Größter Speicherverlust: {} bytes bei '{}'".format(
+                log_message(log_path, "[Memory] Groesster Speicherverlust: {} bytes bei '{}'".format(
                     max_drop, drop_context), force=True)
 
 
 def monitor_memory(log_path=None, force_gc=False, context=""):
     """
-    Überwacht Speicherverbrauch mit detaillierter Diagnose.
+    ueberwacht Speicherverbrauch mit detaillierter Diagnose.
     """
     global _last_gc_time, _gc_counter
     
@@ -117,15 +120,15 @@ def monitor_memory(log_path=None, force_gc=False, context=""):
 
 
 def emergency_cleanup(log_path=None):
-    """Notfall-Speicher-Aufräumung"""
+    """Notfall-Speicher-Aufraeumung"""
     try:
         import time
         log_message(log_path, "[Memory] Notfall-Cleanup gestartet", force=True)
         
-        # Optimierte GC-Durchläufe (weniger Zyklen, mehr Zeit)
+        # Optimierte GC-Durchlaeufe (weniger Zyklen, mehr Zeit)
         for i in range(3):
             gc.collect()
-            time.sleep(0.2)  # Längerer Sleep für bessere GC-Effizienz
+            time.sleep(0.2)  # Laengerer Sleep fuer bessere GC-Effizienz
         
         free_mem = gc.mem_free()
         log_message(log_path, "[Memory] Notfall-Cleanup beendet: {} bytes frei".format(free_mem), force=True)
@@ -136,8 +139,50 @@ def emergency_cleanup(log_path=None):
         return 0
 
 
+def check_and_cleanup_low_memory(log_path=None, threshold=8192, cooldown_s=300):
+    """Sanfter Low-Memory-Manager mit Hysterese und Cooldown.
+    - Fuehrt zuerst eine zusaetzliche GC aus, wenn der Schwellwert unterschritten wird.
+    - Loest erst dann Notfall-Cleanup aus, wenn weiterhin zu wenig frei ist und
+      seit dem letzten Notfall-Cleanup mindestens cooldown_s vergangen sind.
+    """
+    global _low_strikes, _last_emergency_ts
+    try:
+        import time
+        free = gc.mem_free()
+        if free >= threshold:
+            _low_strikes = 0
+            return free
+
+        # Erster Treffer -> zusaetzliche GC und erneut pruefen
+        _low_strikes += 1
+        if _low_strikes == 1:
+            gc.collect()
+            free2 = gc.mem_free()
+            if free2 >= threshold:
+                log_message(log_path, "[Memory LOW] Erholt nach GC: {}KB frei".format(free2//1024))
+                _low_strikes = 0
+                return free2
+            free = free2
+
+        # Notfall-Cleanup nur mit Cooldown
+        now = time.time()
+        if (now - _last_emergency_ts) >= cooldown_s:
+            log_message(log_path, "[EMERGENCY] Kritischer Speichermangel: {}KB frei!".format(free//1024), force=True)
+            free_after = emergency_cleanup(log_path)
+            _last_emergency_ts = now
+            _low_strikes = 0
+            return free_after
+        else:
+            # Cooldown aktiv: leise zurueckmelden, dass wenig frei ist
+            log_message(log_path, "[Memory LOW] Cooldown aktiv: {}KB frei".format(free//1024))
+            return free
+    except Exception as e:
+        log_message(log_path, "[LowMemory Manager Fehler] {}".format(str(e)))
+        return gc.mem_free()
+
+
 def get_memory_stats():
-    """Gibt aktuelle Memory-Stats zurück"""
+    """Gibt aktuelle Memory-Stats zurueck"""
     try:
         return {
             'free': gc.mem_free(),
@@ -149,7 +194,7 @@ def get_memory_stats():
 
 
 def dump_memory_history(log_path=None):
-    """Gibt komplette Speicher-Historie aus für Diagnose"""
+    """Gibt komplette Speicher-Historie aus fuer Diagnose"""
     log_message(log_path, "[Memory History] Letzte {} Messungen:".format(len(_memory_history)), force=True)
     
     for i, sample in enumerate(_memory_history):
@@ -168,7 +213,7 @@ def dump_memory_history(log_path=None):
 def analyze_memory_objects(log_path=None):
     """Analysiert welche Python-Objekte den meisten Speicher verbrauchen"""
     try:
-        # Einfache Objektzählung (MicroPython hat kein sys.getsizeof)
+        # Einfache Objektzaehlung (MicroPython hat kein sys.getsizeof)
         import time
         before_analysis = gc.mem_free()
         
@@ -188,11 +233,11 @@ def analyze_memory_objects(log_path=None):
         log_message(log_path, "[Memory Objects] Test-Objekt Overhead: {} bytes".format(object_overhead), force=True)
         log_message(log_path, "[Memory Objects] Cleanup wiederhergestellt: {} bytes".format(cleanup_recovered), force=True)
         
-        # Zeige GC-Statistiken wenn verfügbar
+        # Zeige GC-Statistiken wenn verfuegbar
         try:
             log_message(log_path, "[Memory Objects] Aktuell allokiert: {} bytes".format(gc.mem_alloc()), force=True)
         except AttributeError:
-            pass  # mem_alloc nicht in allen MicroPython Versionen verfügbar
+            pass  # mem_alloc nicht in allen MicroPython Versionen verfuegbar
             
     except Exception as e:
         log_message(log_path, "[Memory Objects Fehler] {}".format(str(e)))

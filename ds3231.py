@@ -3,7 +3,7 @@ import machine
 
 class RTC:
     """
-    Minimal-Wrapper für den DS3231 (I²C).
+    Minimal-Wrapper fuer den DS3231 (I²C).
     – maskiert 12-h-/Century-Bits
     – korrekter Wochentag-Index
     – liefert wahlweise Format-Strings oder Roh-Tuple
@@ -41,7 +41,7 @@ class RTC:
 
     @staticmethod
     def _z(val):
-        return "%02d" % val  # Null auffüllen
+        return "%02d" % val  # Null auffuellen
 
     # ----------------------------------------------------------
     #   Public API
@@ -74,7 +74,7 @@ class RTC:
         try:
             buf = self.i2c.readfrom_mem(self.addr, self.reg, 7)
         except Exception:
-            return None  # Leser kann prüfen: if x is None: ...
+            return None  # Leser kann pruefen: if x is None: ...
 
         # --- Maskieren & Dekodieren ---
         sec = self._bcd2bin(buf[0] & 0x7F)

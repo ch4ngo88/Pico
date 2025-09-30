@@ -5,6 +5,8 @@ from led import led_kranz_animation, set_yellow_leds, led_kranz_einschalten
 from time_config import aktualisiere_zeit
 from log_utils import log_message
 from joystick import get_joystick_direction
+from recovery_manager import feed_watchdog
+from crash_guard import set_stage
 
 # --------------------------------------------------------------------
 #   Konstante Lookup-Tabellen
@@ -49,12 +51,23 @@ _LED_TEST_TIMES = [
 def test_program(lcd, np, wlan, log_path=None, volume_percent=50):
     """
     Selbsttest-Sequenz (ca. 1 ½ Minuten) – bricht sofort ab,
-    wenn die Joystick-Taste gedrückt wird.
+    wenn die Joystick-Taste gedrueckt wird.
     """
 
     # ------------------------------------------------------------
     #   interne Helper
     # ------------------------------------------------------------
+    def _feed():
+        try:
+            feed_watchdog(log_path)
+        except Exception:
+            pass
+
+    def safe_sleep(sec):
+        _feed()
+        time.sleep(sec)
+        _feed()
+
     def _lcd_bar_char():
         try:
             lcd.custom_char(0, [0b11111] * 8)
@@ -68,7 +81,7 @@ def test_program(lcd, np, wlan, log_path=None, volume_percent=50):
             lcd.move_to(0, 1)
             for _ in range(16):
                 lcd.putchar(chr(0))
-                time.sleep(0.05)
+                safe_sleep(0.05)
         except Exception as e:
             log_message(log_path, "Ladebalken: {}".format(str(e)))
 
@@ -77,20 +90,21 @@ def test_program(lcd, np, wlan, log_path=None, volume_percent=50):
             h, m, s, wd, d, mo, y = aktualisiere_zeit()
             lcd.clear()
             lcd.putstr("{:02}.{:02}.{:02}".format(d, mo, y%100).center(16))
+            _feed()
         except Exception as e:
             lcd.clear()
             lcd.putstr("Datum Fehler")
             log_message(log_path, "Datumlesen: {}".format(str(e)))
-            time.sleep(2)
+            safe_sleep(2)
 
     def _blink_green(count=3, delay=0.2):
         for _ in range(count):
             np.fill(0, 255, 0)
             np.show()
-            time.sleep(delay)
+            safe_sleep(delay)
             np.fill(0, 0, 0)
             np.show()
-            time.sleep(delay)
+            safe_sleep(delay)
 
     def _smooth_blue():
         try:
@@ -98,10 +112,10 @@ def test_program(lcd, np, wlan, log_path=None, volume_percent=50):
                 for i in range(8):
                     np.set_pixel(i, 0, 0, b)
                 np.show()
-                time.sleep(0.05)
+                safe_sleep(0.05)
         except Exception as e:
             log_message(log_path, "Blue-fade: {}".format(str(e)))
-        time.sleep(1)
+        safe_sleep(1)
 
     def _refresh_clock():
         try:
@@ -110,6 +124,7 @@ def test_program(lcd, np, wlan, log_path=None, volume_percent=50):
             h, m, _, wd, *_ = aktualisiere_zeit()
             update_display(lcd, DAY_NAMES, wd, h, m)
             update_leds_based_on_time(np, h, m)
+            _feed()
         except Exception as e:
             log_message(log_path, "Clock-Refresh: {}".format(str(e)))
 
@@ -119,12 +134,13 @@ def test_program(lcd, np, wlan, log_path=None, volume_percent=50):
     def _run_led_tests():
         leds_total, y_count, toggle = 8, 1, True
         for wd, h, m in _LED_TEST_TIMES:
+            _feed()
             # Sofort-Abbruch?
             if get_joystick_direction() == "press":
                 lcd.clear()
                 lcd.putstr("Test beendet.")
                 log_message(log_path, "Test abgebrochen (Joystick).")
-                time.sleep(1.5)
+                safe_sleep(1.5)
                 return True
 
             # Display-Update
@@ -147,7 +163,7 @@ def test_program(lcd, np, wlan, log_path=None, volume_percent=50):
                 log_message(log_path, "LED-Update: {}".format(str(e)))
 
             # Kurze Pause
-            time.sleep(0.25)
+            safe_sleep(0.25)
 
         log_message(log_path, "LED-Tests erfolgreich abgeschlossen.")
         return False
@@ -157,17 +173,17 @@ def test_program(lcd, np, wlan, log_path=None, volume_percent=50):
     # ------------------------------------------------------------
     def _finale():
         try:
-            time.sleep(1)
+            safe_sleep(1)
             lcd.clear()
             lcd.putstr("    System    ")
             lcd.move_to(0, 1)
             lcd.putstr("    Ready     ")
-            time.sleep(2)
+            safe_sleep(2)
 
             _blink_green(4, 0.15)
             np.fill(0, 0, 0)
             np.show()
-            time.sleep(0.3)
+            safe_sleep(0.3)
             _smooth_blue()
 
             lcd.clear()
@@ -175,13 +191,13 @@ def test_program(lcd, np, wlan, log_path=None, volume_percent=50):
             lcd.move_to(0, 1)
             lcd.putstr("Marco da Silva")
             tempr(volume_percent)  # Musik
-            time.sleep(1.5)
+            safe_sleep(1.5)
 
             lcd.clear()
             lcd.putstr("Hab dich lieb")
             lcd.move_to(0, 1)
             lcd.putstr("kleine Maus")
-            time.sleep(2)
+            safe_sleep(2)
 
             lcd.clear()
             np.fill(0, 0, 0)
@@ -195,10 +211,28 @@ def test_program(lcd, np, wlan, log_path=None, volume_percent=50):
     #   Ablauf starten
     # ------------------------------------------------------------
     _lcd_bar_char()
+    _feed()
     log_message(log_path, "Testprogramm gestartet.")
+    try:
+        set_stage("test:start", log_path)
+    except Exception:
+        pass
     _lcd_bar("Self-Diagnostic")
+    try:
+        set_stage("test:bar", log_path)
+    except Exception:
+        pass
     _show_date()
+    try:
+        set_stage("test:anim", log_path)
+    except Exception:
+        pass
     led_kranz_animation(np)
+    _feed()
 
     if not _run_led_tests():
+        try:
+            set_stage("test:finale", log_path)
+        except Exception:
+            pass
         _finale()
