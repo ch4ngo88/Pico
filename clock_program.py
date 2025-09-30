@@ -647,6 +647,8 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
         except Exception as e:
             log_message(log_path, "[BackToClock Fehler] {}".format(str(e)))
 
+
+    
     # Hauptschleife mit garantierter Cleanup
     try:
         while True:
@@ -919,15 +921,17 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                     # Memory-Check alle 3 Minuten (optimiert von 5 Min)
                     if current_time % 180 == 0:
                         feed_watchdog(log_path)  # Watchdog vor Memory-Ops füttern
-                        free_mem = monitor_memory(log_path)
-                        if free_mem < 8192:  # Weniger als 8KB (optimiert von 5KB)
-                            feed_watchdog(log_path)  # Watchdog vor Emergency-Cleanup
+                        free_mem = monitor_memory(log_path, context="main_loop_check")
+                        
+                        # Notfall-Cleanup bei kritischem Speichermangel
+                        if free_mem < 8192:  # Weniger als 8KB - Notfall
+                            log_message(log_path, "[EMERGENCY] Kritischer Speichermangel: {}KB frei!".format(
+                                free_mem//1024), force=True)
+                            feed_watchdog(log_path)
                             emergency_cleanup(log_path)
-                            feed_watchdog(log_path)  # Watchdog nach Emergency-Cleanup
+                            feed_watchdog(log_path)
                 
-                # LED-Toggle Web-Signal prüfen (alle 5 Sekunden)
-                if current_time % 5 == 0:
-                    _check_led_toggle_signal(np, lcd, led, blue_led, log_path)
+
                             
             except Exception as e:
                 log_message(log_path, "[System Check Fehler] {}".format(str(e)))
@@ -949,33 +953,3 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
         log_message(log_path, "[System] Cleanup abgeschlossen.", force=True)
 
 
-def _check_led_toggle_signal(np, lcd, led, blue_led, log_path):
-    """Prüft auf LED-Toggle-Signal vom Webserver"""
-    global leds_auto_update, last_menu_exit_time
-    
-    try:
-        # Prüfe ob Toggle-Signal-Datei existiert
-        try:
-            with open("/sd/.led_toggle_request", "r"):
-                pass  # Datei existiert
-        except OSError:
-            return  # Datei existiert nicht
-            try:
-                # Lösche Signal-Datei
-                os.remove("/sd/.led_toggle_request")
-                
-                # Führe LED-Toggle aus
-                current_time = time.time()
-                if (current_time - last_menu_exit_time) > 1.0:  # Sicherheitsabstand
-                    leds_auto_update = not leds_auto_update
-                    hour, minute, *_ = aktualisiere_zeit(log_path)
-                    toggle_led_status(np, lcd, leds_auto_update, hour, minute, led, blue_led)
-                    log_message(log_path, "[Web-LED-Toggle] LEDs umgeschaltet: {}".format("AN" if leds_auto_update else "AUS"))
-                else:
-                    log_message(log_path, "[Web-LED-Toggle] Zu früh nach Menü - ignoriert")
-                    
-            except Exception as remove_error:
-                log_message(log_path, "[Web-LED-Toggle] Signal-Datei-Fehler: {}".format(str(remove_error)))
-                
-    except Exception as e:
-        log_message(log_path, "[Web-LED-Toggle] Prüfung fehlgeschlagen: {}".format(str(e)))

@@ -9,7 +9,7 @@ from log_utils import log_important
 _last_activity = 0
 _recovery_active = False
 _wdt = None
-_WATCHDOG_TIMEOUT = 30000  # 30 Sekunden (verhindert Reset-Loops bei Memory-Ops)
+_WATCHDOG_TIMEOUT = 8000   # 8 Sekunden (Maximum für Pico - 8388ms Limit)
 
 
 # --------------------------------------------------------------------
@@ -21,7 +21,7 @@ def init_recovery_system(log_path=None):
     try:
         _wdt = WDT(timeout=_WATCHDOG_TIMEOUT)
         _last_activity = time.time()
-        log_important(log_path, "[Recovery] Watchdog initialisiert (30s - Memory-safe)")
+        log_important(log_path, "[Recovery] Watchdog initialisiert (8s - Pico Maximum)")
         return True
     except Exception as e:
         log_important(log_path, "[Recovery] Watchdog Fehler: " + str(e))

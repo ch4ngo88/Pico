@@ -315,6 +315,10 @@ class PollerGuard:
 def handle_website_connection(s, log_path=None):
     cl = None
     
+    # Memory-Monitoring für Web-Requests
+    from memory_monitor import monitor_memory
+    monitor_memory(log_path, context="web_request_start")
+    
     try:
         # Sichere Poller-Behandlung mit automatischer Cleanup
         try:
@@ -362,9 +366,6 @@ def handle_website_connection(s, log_path=None):
 
             elif method == "POST" and path == "/toggle_debug":
                 _toggle_debug_mode(cl, log_path)
-                
-            elif method == "POST" and path == "/toggle_leds":
-                _toggle_leds(cl, log_path)
 
             elif path in ("/", "/index.html"):
                 _serve_index_page(cl, log_path)
@@ -397,6 +398,9 @@ def handle_website_connection(s, log_path=None):
                     cl.close()
                 except Exception:
                     pass
+            
+            # Memory-Monitoring nach Request
+            monitor_memory(log_path, context="web_request_end")
 
     except Exception as e:
         # Nur kritische Connection-Fehler loggen (nicht jede Timeout)
@@ -691,35 +695,6 @@ def _toggle_debug_mode(cl, log_path=None):
             pass
 
 
-def _toggle_leds(cl, log_path=None):
-    """Schaltet LEDs um (Display Toggle Funktion)"""
-    try:
-        # Importiere Funktionen aus clock_program
-        # Da wir nicht direkt auf die Clock-Variablen zugreifen können,
-        # senden wir ein Signal über eine Datei
-        
-        try:
-            # Erstelle Toggle-Signal-Datei
-            with open("/sd/.led_toggle_request", "w") as f:
-                import time
-                f.write("LED toggle request at: {}".format(str(time.localtime())))
-            
-            log_message(log_path, "[LED-Toggle] LED-Umschaltung angefordert")
-            
-            # Rückmeldung an Browser
-            response = "HTTP/1.1 200 OK\r\n\r\nLED Toggle erfolgreich angefordert"
-            cl.sendall(response.encode())
-            
-        except Exception as file_error:
-            log_message(log_path, "[LED-Toggle] Datei-Fehler: " + str(file_error))
-            cl.sendall(b"HTTP/1.1 500\r\n\r\nLED Toggle Dateifehler")
-            
-    except Exception as e:
-        error_msg = "Kritischer Fehler beim LED-Toggle: " + str(e)
-        log_message(log_path, error_msg)
-        cl.sendall("HTTP/1.1 500\r\n\r\nInterner Serverfehler: {}".format(error_msg[:50]).encode())
-
-
 # --------------------------------------------------------------------
 #   Power Settings
 # --------------------------------------------------------------------
@@ -866,7 +841,7 @@ def _generate_alarm_block(zeit, text, tage, aktiv):
 {}
 <label><input type="checkbox" {}> Aktiv</label>
 </div></div>\n'''.format(
-        zeit, _html_escape(text), chk_days, chk_a)
+        zeit, html_escape(text), chk_days, chk_a)
 
 
 def _send_display_block_safe(cl):
@@ -877,7 +852,8 @@ def _send_display_block_safe(cl):
 <h3>Display-Einstellungen</h3>
 <label><input type="checkbox" id="displayAuto" {}> Automatisches Ein/Aus</label><br>
 <label>Ein-Zeit: <input type="time" id="displayOn" value="{}"></label><br>
-<label>Aus-Zeit: <input type="time" id="displayOff" value="{}"></label>
+<label>Aus-Zeit: <input type="time" id="displayOff" value="{}"></label><br>
+<button type="button" class="led-toggle-btn" onclick="toggleLEDs()">💡 LEDs Ein/Aus</button>
 </div>\n'''.format(
         "checked" if settings.get('auto', True) else "",
         settings.get('on_time', '06:45'),
@@ -890,39 +866,29 @@ def _send_footer_chunks(cl, log_path=None):
     """Memory-sichere Footer und JavaScript Übertragung"""
     import gc
     
-    # Footer Teil 1
+    # Button-Container mit Log-Button und Save-Button
     debug_link = ' | <a href="/debug">Debug</a>' if is_debug_mode_enabled() else ''
-    footer1 = '''<button id="saveButton" type="button" onclick="saveAllSettings()">Alle Einstellungen speichern</button>
+    footer1 = '''<div class="button-container">
+<button id="saveButton" type="button" onclick="saveAllSettings()">Alle Einstellungen speichern</button>
+<button type="button" class="log-btn" onclick="window.open('/logs', '_blank')">📋 System Logs anzeigen</button>
+</div>
 </form></div></div><footer>Neuza Wecker{}</footer>\n'''.format(debug_link)
     cl.sendall(footer1.encode())
     gc.collect()
     
-    # JavaScript in kleineren Chunks
-    js_chunks = _split_javascript()
-    for chunk in js_chunks:
-        cl.sendall(chunk.encode())
-        gc.collect()
+    # JavaScript als komplettes Stück (sicherer für Funktionen)
+    js_complete = "<script>" + JS_SNIPPET + "</script>"
+    cl.sendall(js_complete.encode())
+    gc.collect()
     
     # HTML Ende
     cl.sendall(b"</body></html>")
 
 
-def _split_javascript():
-    """Teilt JavaScript in memory-safe chunks"""
-    return [
-        "<script>",
-        JS_SNIPPET[:500],  # Erste 500 Zeichen
-        JS_SNIPPET[500:1000] if len(JS_SNIPPET) > 500 else "",  # Nächste 500
-        JS_SNIPPET[1000:] if len(JS_SNIPPET) > 1000 else "",  # Rest
-        "</script>"
-    ]
+# Alte _split_javascript entfernt - JavaScript wird jetzt als komplettes Stück gesendet
 
 
-def _html_escape(text):
-    """Einfache HTML-Escape Funktion"""
-    if not text:
-        return ""
-    return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+# _html_escape entfernt - verwende html_escape() stattdessen
 
 
 def _send_error_response(cl, code, message):
@@ -934,47 +900,10 @@ def _send_error_response(cl, code, message):
         pass  # Fehler beim Fehler-senden ignorieren
 
 
-def _send_alarm_blocks(cl, alarme):
-    """Memory-optimiert: Alarm-Blöcke einzeln streamen"""
-    # Auf 5 Blöcke auffüllen
-    all_alarms = alarme + [("", "", [], "")] * (5 - len(alarme))
-    
-    for zeit, text, tage, aktiv in all_alarms:
-        # Kompakte HTML-Generierung pro Block
-        chk_days = ""
-        for w in ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]:
-            chk = "checked" if w in tage else ""
-            chk_days += '<label><input type="checkbox" {}> {}</label>\n'.format(chk, w)
-        
-        chk_a = "checked" if aktiv.strip().lower() == "aktiv" else ""
-        
-        block_html = '''<div class="alarm-block">
-<input type="time" value="{}">
-<input type="text" value="{}">
-<div class="checkboxes">
-{}
-<label><input type="checkbox" {}> Aktiv</label>
-</div></div>
-'''.format(zeit, _html_escape(text), chk_days, chk_a)
-        
-        cl.sendall(block_html.encode())
+# Alte _send_alarm_blocks entfernt - nur _send_alarm_blocks_safe wird verwendet
 
 
-def _send_display_block(cl):
-    """Memory-optimiert: Display-Settings Block streamen"""
-    display_settings = _load_display_settings()
-    auto_checked = 'checked' if display_settings.get('DISPLAY_AUTO', 'true') == 'true' else ''
-    
-    display_html = '''<div class="display-settings-block">
-<h3>Display Automatik</h3>
-<label><input type="checkbox" id="displayAuto" {}> Automatisch Ein/Aus</label><br>
-<label>Display An: <input type="time" id="displayOn" value="{}"></label><br>
-<label>Display Aus: <input type="time" id="displayOff" value="{}"></label>
-</div>'''.format(auto_checked, 
-                display_settings.get('DISPLAY_ON_TIME', '07:00'), 
-                display_settings.get('DISPLAY_OFF_TIME', '22:00'))
-    
-    cl.sendall(display_html.encode())
+# Alte _send_display_block entfernt - nur _send_display_block_safe wird verwendet
 
 
 def _load_alarms(path):
@@ -995,52 +924,7 @@ def _load_alarms(path):
     return alarme[:5]  # maximal fünf zurückliefern
 
 
-def _render_index(alarme):
-    # Alarm-Blöcke generieren
-    rows = ""
-    for zeit, text, tage, aktiv in alarme + [("", "", [], "")] * (5 - len(alarme)):
-        rows += '<div class="alarm-block">\n'
-        rows += '<input type="time" value="{}">\n'.format(zeit)
-        rows += '<input type="text" value="{}">\n<div class="checkboxes">\n'.format(html_escape(text))
-        for w in ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]:
-            chk = "checked" if w in tage else ""
-            rows += '<label><input type="checkbox" {}> {}</label>\n'.format(chk, w)
-        chk_a = "checked" if aktiv.strip().lower() == "aktiv" else ""
-        rows += '<label><input type="checkbox" {}> Aktiv</label>\n</div></div>\n'.format(chk_a)
-
-    # Display-Settings laden und integrieren
-    display_settings = _load_display_settings()
-    auto_checked = 'checked' if display_settings.get('DISPLAY_AUTO', 'true') == 'true' else ''
-    
-    # Display-Block mit LED-Toggle hinzufügen
-    display_block = '''<div class="alarm-block">
-<h3>Display Automatik</h3>
-<label><input type="checkbox" id="displayAuto" {}> Automatisch Ein/Aus</label><br>
-<label>Display An: <input type="time" id="displayOn" value="{}"></label><br>
-<label>Display Aus: <input type="time" id="displayOff" value="{}"></label><br>
-<button type="button" class="led-toggle-btn" onclick="toggleLEDs()">💡 LEDs Ein/Aus</button>
-</div>'''.format(auto_checked, display_settings.get('DISPLAY_ON_TIME', '07:00'), display_settings.get('DISPLAY_OFF_TIME', '22:00'))
-
-    # Log-Viewer immer verfügbar + Debug-Link nur wenn aktiviert
-    log_link = ' | <a href="/logs" class="log-link">📋 Logs anzeigen</a>'
-    debug_link = ' | <a href="/debug" class="debug-link">Debug-Modus</a>' if is_debug_mode_enabled() else ''
-    all_links = log_link + debug_link
-    
-    return INDEX_TEMPLATE.format(rows, display_block, JS_SNIPPET, all_links)
-
-
-INDEX_TEMPLATE = """<!DOCTYPE html>
-<html lang="de">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Neuza Wecker</title><link rel="stylesheet" href="styles.css"></head>
-<body><header><h1>Neuza Wecker</h1></header>
-<div class="main-container"><div class="image-container">
-<img src="neuza.webp" alt="Neuza" onerror="this.style.display='none'"></div>
-<div class="form-container"><form id="alarmForm">{0}
-{1}
-<button id="saveButton" type="button" onclick="saveAllSettings()">Alle Einstellungen speichern</button>
-</form></div></div><footer>Neuza Wecker{3}</footer>
-<script>{2}</script></body></html>"""
+# Alte _render_index() und INDEX_TEMPLATE entfernt - ersetzt durch Streaming-System (_send_html_chunks)
 
 JS_SNIPPET = """async function saveAllSettings(){
 const b=document.getElementById('saveButton');

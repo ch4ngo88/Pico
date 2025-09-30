@@ -3,15 +3,73 @@ import gc
 from log_utils import log_message, log_once_per_day
 
 # --------------------------------------------------------------------
-# Memory Management
+# Memory Management & Diagnose
 # --------------------------------------------------------------------
 _last_gc_time = 0
 _gc_counter = 0
+_memory_history = []  # Speicher-Verlauf für Diagnose
+_boot_memory = None   # Speicher direkt nach Boot
+_max_history = 30     # Behalte letzte 30 Messungen
 
-def monitor_memory(log_path=None, force_gc=False):
+def record_boot_memory():
+    """Speichere Speicher direkt nach Boot für Vergleich"""
+    global _boot_memory
+    if _boot_memory is None:
+        _boot_memory = gc.mem_free()
+        log_message(None, "[Memory Diagnose] Boot-Speicher: {} bytes".format(_boot_memory), force=True)
+
+
+def _add_memory_sample(free_mem, context=""):
+    """Fügt Speicher-Sample zur Historie hinzu"""
+    global _memory_history, _max_history
+    import time
+    
+    sample = {
+        'time': time.time(),
+        'free': free_mem,
+        'context': context
+    }
+    
+    _memory_history.append(sample)
+    if len(_memory_history) > _max_history:
+        _memory_history.pop(0)
+
+
+def analyze_memory_trend(log_path=None):
+    """Analysiert Speicher-Trend und findet Lecks"""
+    if len(_memory_history) < 5:
+        return
+    
+    # Berechne Speicher-Verlust über Zeit
+    first = _memory_history[0]
+    last = _memory_history[-1]
+    time_diff = last['time'] - first['time']
+    memory_diff = last['free'] - first['free']
+    
+    if time_diff > 300:  # Nur wenn mindestens 5 Minuten Daten
+        leak_rate = memory_diff / time_diff  # bytes per second
+        
+        if leak_rate < -10:  # Mehr als 10 bytes/sec Verlust
+            log_message(log_path, "[Memory LEAK DETECTED] {:.1f} bytes/sec Verlust über {:.1f}min".format(
+                leak_rate, time_diff/60), force=True)
+            
+            # Finde größten Sprung
+            max_drop = 0
+            drop_context = ""
+            for i in range(1, len(_memory_history)):
+                drop = _memory_history[i-1]['free'] - _memory_history[i]['free']
+                if drop > max_drop:
+                    max_drop = drop
+                    drop_context = _memory_history[i]['context']
+            
+            if max_drop > 2048:
+                log_message(log_path, "[Memory] Größter Speicherverlust: {} bytes bei '{}'".format(
+                    max_drop, drop_context), force=True)
+
+
+def monitor_memory(log_path=None, force_gc=False, context=""):
     """
-    Überwacht Speicherverbrauch und führt bei Bedarf Garbage Collection durch.
-    Loggt nur wichtige Änderungen.
+    Überwacht Speicherverbrauch mit detaillierter Diagnose.
     """
     global _last_gc_time, _gc_counter
     
@@ -19,24 +77,39 @@ def monitor_memory(log_path=None, force_gc=False):
         import time
         now = time.time()
         
-        # Automatische GC alle 3 Minuten oder bei Bedarf (optimiert von 5 Min)
+        # Speichere Boot-Speicher beim ersten Aufruf
+        record_boot_memory()
+        
+        current_free = gc.mem_free()
+        _add_memory_sample(current_free, context)
+        
+        # Automatische GC alle 3 Minuten oder bei Bedarf
         if force_gc or (now - _last_gc_time > 180):
-            free_before = gc.mem_free()
+            free_before = current_free
             gc.collect()
             free_after = gc.mem_free()
             _last_gc_time = now
             _gc_counter += 1
             
-            # Nur bei signifikanten Änderungen loggen
+            # Diagnose-Info bei jedem GC
             freed = free_after - free_before
-            if abs(freed) > 1024 or _gc_counter % 20 == 0:  # Alle 20 GCs oder >1KB befreit
-                log_message(log_path, "[Memory] GC #{}: {} bytes frei (+{})".format(_gc_counter, free_after, freed))
+            boot_loss = _boot_memory - free_after if _boot_memory else 0
+            
+            log_message(log_path, "[Memory] GC #{}: {}KB frei (+{}), Boot-Verlust: {}KB".format(
+                _gc_counter, free_after//1024, freed, boot_loss//1024))
+            
+            # Analysiere Trend alle 10 GCs
+            if _gc_counter % 10 == 0:
+                analyze_memory_trend(log_path)
             
             # Warnung bei niedrigem Speicher
-            if free_after < 12288:  # Weniger als 12KB (optimiert von 10KB)
-                log_message(log_path, "[Memory WARNING] Nur noch {} bytes frei!".format(free_after), force=True)
+            if free_after < 15360:
+                log_message(log_path, "[Memory WARNING] Nur noch {}KB frei! Context: {}".format(
+                    free_after//1024, context), force=True)
                 
-        return gc.mem_free()
+            return free_after
+        
+        return current_free
         
     except Exception as e:
         log_message(log_path, "[Memory Monitor Fehler] {}".format(str(e)))
@@ -73,3 +146,53 @@ def get_memory_stats():
         }
     except Exception:
         return {'free': 0, 'allocated': 0, 'gc_count': 0}
+
+
+def dump_memory_history(log_path=None):
+    """Gibt komplette Speicher-Historie aus für Diagnose"""
+    log_message(log_path, "[Memory History] Letzte {} Messungen:".format(len(_memory_history)), force=True)
+    
+    for i, sample in enumerate(_memory_history):
+        import time
+        rel_time = sample['time'] - (_memory_history[0]['time'] if _memory_history else 0)
+        log_message(log_path, "  #{}: +{:.0f}s -> {}KB frei ({})".format(
+            i+1, rel_time, sample['free']//1024, sample['context']), force=True)
+    
+    if _boot_memory:
+        current = gc.mem_free()
+        total_loss = _boot_memory - current
+        log_message(log_path, "[Memory Summary] Boot: {}KB, Jetzt: {}KB, Verlust: {}KB".format(
+            _boot_memory//1024, current//1024, total_loss//1024), force=True)
+
+
+def analyze_memory_objects(log_path=None):
+    """Analysiert welche Python-Objekte den meisten Speicher verbrauchen"""
+    try:
+        # Einfache Objektzählung (MicroPython hat kein sys.getsizeof)
+        import time
+        before_analysis = gc.mem_free()
+        
+        # Erstelle Test-Objekte um Overhead zu messen
+        test_dict = {'test': 'value', 'number': 42}
+        test_list = [1, 2, 3, 4, 5]
+        test_string = "Memory analysis test string" * 10
+        
+        after_objects = gc.mem_free()
+        object_overhead = before_analysis - after_objects
+        
+        del test_dict, test_list, test_string
+        gc.collect()
+        after_cleanup = gc.mem_free()
+        cleanup_recovered = after_cleanup - after_objects
+        
+        log_message(log_path, "[Memory Objects] Test-Objekt Overhead: {} bytes".format(object_overhead), force=True)
+        log_message(log_path, "[Memory Objects] Cleanup wiederhergestellt: {} bytes".format(cleanup_recovered), force=True)
+        
+        # Zeige GC-Statistiken wenn verfügbar
+        try:
+            log_message(log_path, "[Memory Objects] Aktuell allokiert: {} bytes".format(gc.mem_alloc()), force=True)
+        except AttributeError:
+            pass  # mem_alloc nicht in allen MicroPython Versionen verfügbar
+            
+    except Exception as e:
+        log_message(log_path, "[Memory Objects Fehler] {}".format(str(e)))

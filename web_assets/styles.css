@@ -139,16 +139,7 @@ footer {
   color: #999;
 }
 
-.log-link {
-  font-size: 0.8em;
-  color: #ff85a2;
-  text-decoration: none;
-  margin: 0 5px;
-}
 
-.log-link:hover {
-  color: #ff6389;
-}
 
 .led-toggle-btn {
   margin-top: 10px;
@@ -170,6 +161,34 @@ footer {
 .led-toggle-btn:disabled {
   background-color: #ffb3c6;
   cursor: default;
+}
+
+.button-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 20px;
+}
+
+.log-btn {
+  padding: 10px 20px;
+  font-size: 0.95em;
+  background-color: #87ceeb;
+  border: none;
+  border-radius: 8px;
+  color: white;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  width: 100%;
+}
+
+.log-btn:hover {
+  background-color: #6bb6ff;
+}
+
+.log-btn:active {
+  background-color: #4682b4;
 }
 
 /* Responsive Anpassung */
