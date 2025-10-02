@@ -521,8 +521,15 @@ def _save_alarms_unsafe(body, log_path=None):
                 f.write("TIME=" + uhrzeit + "\nTEXT=" + text + "\n")
                 f.write("DAYS=" + (','.join(tage) if tage else '-') + "\n")
                 f.write("STATUS=" + status + "\n---\n")
-
-        os.sync()
+            # Flush vor sync
+            f.flush()
+        
+        # Garantiertes Sync mit Error-Handling
+        try:
+            os.sync()
+        except Exception as e:
+            log_message(log_path, "[Sync Fehler nach Alarm Save] {}".format(str(e)))
+        
         log_message(log_path, "Alarme erfolgreich gespeichert.")
     except Exception as e:
         log_message(log_path, "Fehler beim Speichern: " + str(e))
@@ -595,7 +602,7 @@ def _serve_file_from_sd(cl, file_name, log_path=None):
                     try:
                         from recovery_manager import feed_watchdog
                         feed_watchdog(log_path)
-                    except:
+                    except Exception:
                         pass  # Falls Import fehlschlaegt, weiterarbeiten
     except Exception as e:
         log_message(log_path, "Fehler beim Senden von " + clean_filename + ": " + str(e))
@@ -689,8 +696,14 @@ def _save_display_settings_unsafe(body, log_path=None):
             f.write("DISPLAY_AUTO=" + auto + "\n") 
             f.write("DISPLAY_ON_TIME=" + on_t + "\n") 
             f.write("DISPLAY_OFF_TIME=" + off_t + "\n")
+            f.flush()
         
-        os.sync()
+        # Garantiertes Sync mit Error-Handling
+        try:
+            os.sync()
+        except Exception as e:
+            log_message(log_path, "[Sync Fehler nach Display Settings] {}".format(str(e)))
+        
         log_message(log_path, "Display-Einstellungen gespeichert.")
     except Exception as e:
         log_message(log_path, "Fehler beim Speichern der Display-Einstellungen: " + str(e))

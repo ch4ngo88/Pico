@@ -402,15 +402,15 @@ def alarm_ausloesen(np, lcd, volume, text, idx=None, log_path=None):
                 try:
                     np.fill(0, 0, 0)
                     np.show()
-                except:
-                    pass
+                except Exception as e:
+                    log_message(log_path_global, "[Alarm Ende LED Reset] {}".format(str(e)))
             
             # Zeit/LEDs aktualisieren 
             try:
                 hour, minute, *_ = aktualisiere_zeit()
                 update_leds_based_on_time(np, hour, minute)
-            except:
-                pass
+            except Exception as e:
+                log_message(log_path_global, "[Alarm Ende Zeit Update] {}".format(str(e)))
                 
             # Joystick-Buffer leeren
             clear_joystick_buffer()
@@ -598,7 +598,15 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
     leds_auto_update = True
     last_display_check = 0
     current_display_state = True
-    current_brightness = 64
+    
+    # Initiale Helligkeit basierend auf aktueller Zeit ermitteln
+    try:
+        hour, minute, _, _, _, _, _ = aktualisiere_zeit()
+        _, initial_brightness = should_display_be_on(hour, minute, log_path)
+        current_brightness = initial_brightness
+    except Exception:
+        current_brightness = 64  # Fallback
+    
     power_mode_active = False  # LED Power Modus (30% -> 100%)
 
 
@@ -669,6 +677,32 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
     
     # Recovery System initialisieren
     init_recovery_system(log_path)
+    
+    # Initiales Display-Check beim Start
+    try:
+        hour, minute, _, _, _, _, _ = aktualisiere_zeit()
+        should_be_on, initial_brightness = should_display_be_on(hour, minute, log_path)
+        current_display_state = should_be_on
+        current_brightness = initial_brightness
+        
+        if lcd:
+            if should_be_on:
+                lcd.backlight_on()
+            else:
+                lcd.backlight_off()
+        
+        if led:
+            led.value(1 if should_be_on else 0)
+        
+        if blue_led:
+            blue_led.value(1 if should_be_on else 0)
+        
+        if np:
+            np.brightness(current_brightness)
+        
+        log_message(log_path, "[Display Init] {} (Helligkeit: {})".format('AN' if should_be_on else 'AUS', current_brightness))
+    except Exception as e:
+        log_message(log_path, "[Display Init Fehler] {}".format(str(e)))
 
     def zuruck_zur_uhranzeige():
         nonlocal menumode, volume_mode

@@ -7,7 +7,7 @@ from log_utils import log_message, log_once_per_day
 # --------------------------------------------------------------------
 _last_gc_time = 0
 _gc_counter = 0
-_memory_history = []  # Speicher-Verlauf fuer Diagnose
+_memory_history = []  # Speicher-Verlauf fuer Diagnose (Tuples)
 _boot_memory = None   # Speicher direkt nach Boot
 _max_history = 30     # Behalte letzte 30 Messungen
 _low_strikes = 0      # aufeinanderfolgende Low-Memory-Treffer
@@ -24,17 +24,10 @@ def record_boot_memory():
 
 
 def _add_memory_sample(free_mem, context=""):
-    """Fuegt Speicher-Sample zur Historie hinzu"""
+    """Fuegt Speicher-Sample zur Historie hinzu (als Tuple: (t, free, ctx))"""
     global _memory_history, _max_history
     import time
-    
-    sample = {
-        'time': time.time(),
-        'free': free_mem,
-        'context': context
-    }
-    
-    _memory_history.append(sample)
+    _memory_history.append((time.time(), free_mem, context))
     if len(_memory_history) > _max_history:
         _memory_history.pop(0)
 
@@ -47,8 +40,8 @@ def analyze_memory_trend(log_path=None):
     # Berechne Speicher-Verlust ueber Zeit
     first = _memory_history[0]
     last = _memory_history[-1]
-    time_diff = last['time'] - first['time']
-    memory_diff = last['free'] - first['free']
+    time_diff = last[0] - first[0]
+    memory_diff = last[1] - first[1]
     
     if time_diff > 300:  # Nur wenn mindestens 5 Minuten Daten
         leak_rate = memory_diff / time_diff  # bytes per second
@@ -61,10 +54,10 @@ def analyze_memory_trend(log_path=None):
             max_drop = 0
             drop_context = ""
             for i in range(1, len(_memory_history)):
-                drop = _memory_history[i-1]['free'] - _memory_history[i]['free']
+                drop = _memory_history[i-1][1] - _memory_history[i][1]
                 if drop > max_drop:
                     max_drop = drop
-                    drop_context = _memory_history[i]['context']
+                    drop_context = _memory_history[i][2]
             
             if max_drop > 2048:
                 log_message(log_path, "[Memory] Groesster Speicherverlust: {} bytes bei '{}'".format(
@@ -99,11 +92,10 @@ def monitor_memory(log_path=None, force_gc=False, context=""):
             freed = free_after - free_before
             boot_loss = _boot_memory - free_after if _boot_memory else 0
             
-            # Weniger Log-Spam: nur loggen bei bedeutender Aenderung oder alle 10 GCs
+            # Log-Spam eliminiert: nur bei bedeutender Aenderung (>=32KB) oder forced GC
             SHOULD_LOG_GC = (
                 force_gc or
-                (_gc_counter % 10 == 0) or
-                (freed >= 8192)  # >= 8KB freigegeben
+                (freed >= 32768)  # >= 32KB freigegeben
             )
             if SHOULD_LOG_GC:
                 log_message(log_path, "[Memory] GC #{}: {}KB frei (+{}), Boot-Verlust: {}KB".format(
@@ -211,9 +203,10 @@ def dump_memory_history(log_path=None):
     
     for i, sample in enumerate(_memory_history):
         import time
-        rel_time = sample['time'] - (_memory_history[0]['time'] if _memory_history else 0)
+        base_time = _memory_history[0][0] if _memory_history else 0
+        rel_time = sample[0] - base_time
         log_message(log_path, "  #{}: +{:.0f}s -> {}KB frei ({})".format(
-            i+1, rel_time, sample['free']//1024, sample['context']), force=True)
+            i+1, rel_time, sample[1]//1024, sample[2]), force=True)
     
     if _boot_memory:
         current = gc.mem_free()

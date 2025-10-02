@@ -96,8 +96,19 @@ def log_message(log_path, message, force=False, category=None):
                 return  # Nachricht unterdrueckt
         _last_messages[message] = now
         
-        # Cache begrenzen (nur letzte 20 Nachrichten merken)
+        # Cache begrenzen mit LRU-Logik (älteste 5 Einträge entfernen bei Überlauf)
         if len(_last_messages) > 20:
+            # Sortiere nach Timestamp und entferne älteste 5
+            try:
+                sorted_items = sorted(_last_messages.items(), key=lambda x: x[1])
+                for msg, _ in sorted_items[:5]:
+                    del _last_messages[msg]
+            except Exception:
+                # Fallback: Einfach Cache clearen
+                _last_messages.clear()
+        
+        # Original Code folgt:
+        if False:  # Deaktiviert, da LRU-Logik oben
             oldest_key = min(_last_messages.keys(), key=lambda k: _last_messages[k])
             del _last_messages[oldest_key]
     

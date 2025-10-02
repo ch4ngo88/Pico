@@ -133,8 +133,17 @@ def test_program(lcd, np, wlan, log_path=None, volume_percent=50):
     # ------------------------------------------------------------
     def _run_led_tests():
         leds_total, y_count, toggle = 8, 1, True
+        loop_counter = 0
         for wd, h, m in _LED_TEST_TIMES:
             _feed()
+            loop_counter += 1
+            
+            # Memory-Cleanup alle 10 Iterationen
+            if loop_counter % 10 == 0:
+                import gc
+                gc.collect()
+                _feed()
+            
             # Sofort-Abbruch?
             if get_joystick_direction() == "press":
                 lcd.clear()
@@ -162,8 +171,15 @@ def test_program(lcd, np, wlan, log_path=None, volume_percent=50):
             except Exception as e:
                 log_message(log_path, "LED-Update: {}".format(str(e)))
 
-            # Kurze Pause
+            # Kurze Pause mit extra WDT-Feed
             safe_sleep(0.25)
+            
+            # Stage-Update alle 5 Iterationen
+            if loop_counter % 5 == 0:
+                try:
+                    set_stage("test:led_{}".format(loop_counter), log_path)
+                except Exception:
+                    pass
 
         log_message(log_path, "LED-Tests erfolgreich abgeschlossen.")
         return False
@@ -173,6 +189,10 @@ def test_program(lcd, np, wlan, log_path=None, volume_percent=50):
     # ------------------------------------------------------------
     def _finale():
         try:
+            # Memory-Cleanup vor Finale
+            import gc
+            gc.collect()
+            _feed()
             safe_sleep(1)
             lcd.clear()
             lcd.putstr("    System    ")
