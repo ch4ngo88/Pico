@@ -256,3 +256,10 @@ def test_program(lcd, np, wlan, log_path=None, volume_percent=50):
         except Exception:
             pass
         _finale()
+    
+    # Stage clearen nach erfolgreichem Abschluss
+    try:
+        from crash_guard import clear_stage
+        clear_stage(log_path)
+    except Exception:
+        pass

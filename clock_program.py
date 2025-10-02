@@ -355,21 +355,6 @@ def check_alarm(hour, minute, aktueller_tag, weckzeiten, weckstatus, log_path):
         if abs(alarm_minuten - aktuelle_minuten) <= 1:
             return index, text
 
-    # Verpasste Alarme nur loggen, wenn sie noch nicht ausgeloest wurden
-    for index, (w_h, w_m, text, tage) in enumerate(weckzeiten):
-        if weckstatus[index]:
-            continue  # wurde ausgeloest oder ignoriert
-        if tag_name not in tage:
-            continue
-        alarm_minuten = w_h * 60 + w_m
-        if abs(alarm_minuten - aktuelle_minuten) <= 1:
-            log_message(
-                log_path,
-                "[Verpasster Alarm?] Index {} – {}:{}, Tag: {}, Tage: {}, weckstatus={}".format(index, w_h, w_m, tag_name, tage, weckstatus[index])
-            )
-            weckstatus[index] = True  # ⚠️ markieren als „behandelt“
-            break
-
     return None, None
 
 
@@ -738,6 +723,11 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                     if result and isinstance(result, tuple):
                         idx, alarm_text = result
                         if idx is not None and alarm_text:
+                            # Debug: Log RTC-Zeit und Alarm-Zeit
+                            alarm_hour, alarm_minute = weckzeiten[idx][:2] if idx < len(weckzeiten) else (0, 0)
+                            log_alarm_event(log_path, "[ALARM-DEBUG] RTC: {:02d}:{:02d}:{:02d}, Alarm-Soll: {:02d}:{:02d}, Index: {}".format(
+                                hour, minute, second, alarm_hour, alarm_minute, idx))
+                            
                             alarm_ausloesen(np, lcd, volume, alarm_text, idx=idx, log_path=log_path)
                             weckstatus[idx] = True
                             log_alarm_event(log_path, "Alarm ausgeloest - Index {}, Text: {}".format(idx, alarm_text))
@@ -846,12 +836,14 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                                 pass
 
             if menumode and lcd:
-                lcd.clear()
-                lcd.move_to((16 - len("System")) // 2, 0)
-                lcd.putstr("System")
-                text = menu_entries[menu_index]
-                lcd.move_to((16 - len(text)) // 2, 1)
-                lcd.putstr(text)
+                # Anti-Bounce: Nur updaten wenn mindestens 100ms im Menu
+                if time.time() - menu_last_interaction > 0.1:
+                    lcd.clear()
+                    lcd.move_to((16 - len("System")) // 2, 0)
+                    lcd.putstr("System")
+                    text = menu_entries[menu_index]
+                    lcd.move_to((16 - len(text)) // 2, 1)
+                    lcd.putstr(text)
 
             if menumode and time.time() - menu_last_interaction > menu_timeout:
                 if lcd:
@@ -915,7 +907,6 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                         lcd.putstr("Auto-Sync: OK" if erfolg else "Auto-Sync: Fail")
                     log_message(log_path, "Auto-Sync erfolgreich." if erfolg else "Auto-Sync fehlgeschlagen (RTC genutzt).")
                     time.sleep(2)
-                    last_sync_day = day
             except Exception as e:
                 log_message(log_path, "[Auto-Sync Fehler] {}".format(str(e)))
 
@@ -949,6 +940,23 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                         
                         if blue_led:
                             blue_led.value(1 if should_be_on else 0)
+                        
+                        # NEU: NeoPixel LED-Kreis auch mitschalten
+                        if np:
+                            if should_be_on:
+                                # LEDs einschalten mit aktueller Zeit
+                                if leds_auto_update:
+                                    try:
+                                        update_leds_based_on_time(np, hour, minute)
+                                    except Exception as e:
+                                        log_message(log_path, "[LED Update Fehler] {}".format(str(e)))
+                            else:
+                                # LEDs ausschalten
+                                try:
+                                    np.fill(0, 0, 0)
+                                    np.show()
+                                except Exception as e:
+                                    log_message(log_path, "[LED Off Fehler] {}".format(str(e)))
                         
                         log_important(log_path, "[Auto Display] {} um {:02d}:{:02d}".format('AN' if should_be_on else 'AUS', hour, minute))
                     
