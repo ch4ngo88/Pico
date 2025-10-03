@@ -13,8 +13,11 @@ from power_management import (
     get_brightness_for_state,
     get_led_power_mode,
     set_led_power_mode,
-    get_volume_settings,
-    set_volume_settings,
+    get_volume,
+    set_volume,
+    get_display_schedule,
+    get_display_state,
+    set_display_state,
 )
 from recovery_manager import init_recovery_system, feed_watchdog, check_system_health, activity_heartbeat
 from memory_monitor import monitor_memory, emergency_cleanup, check_and_cleanup_low_memory
@@ -587,19 +590,25 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
     volume_mode = False
     volume_last_interaction = 0
     volume_timeout = 3
-    volume_profiles = get_volume_settings(log_path)
-    current_volume_profile = 'default'
+    try:
+        volume = get_volume(log_path)
+    except Exception:
+        volume = 50
     volume_dirty = False
-    display_on = True
+    # Initialer Display-State aus power_config lesen
+    try:
+        display_on = (get_display_state(log_path) == 'on')
+    except Exception:
+        display_on = True
     last_display_check = 0
     manual_override_active = False
     manual_override_state = True
     
-    # Initiale Helligkeit basierend auf aktueller Zeit ermitteln
+    # Initiale Helligkeit setzen (nicht per Schedule erzwingen)
     try:
         hour, minute, _, _, _, _, _ = aktualisiere_zeit()
-        _, initial_brightness = should_display_be_on(hour, minute, log_path)
-        current_brightness = initial_brightness
+        # Verwende nur Helligkeitswerte aus Config, Display-Zustand wird separat behandelt
+        current_brightness = get_brightness_for_state(True, log_path)
     except Exception:
         current_brightness = 64  # Fallback
     
@@ -609,7 +618,6 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
     test_running = False
     webserver_running = False
     s = None
-    volume = volume_profiles['default']
     wochentage = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"]
     doppelpunkt_an = True
     letzte_doppelpunkt_zeit = time.time()
@@ -648,30 +656,12 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
             s = None
             log_message(log_path, "[Webserver Start Fehler] {}".format(str(e)))
 
-    def apply_volume_profile(display_state):
-        nonlocal volume, current_volume_profile, volume_profiles
-        try:
-            volume_profiles = get_volume_settings(log_path)
-        except Exception:
-            pass
-        profile = 'default' if display_state else 'night'
-        target = volume_profiles['default'] if profile == 'default' else volume_profiles.get('night', volume_profiles['default'])
-        volume = max(0, min(100, target))
-        current_volume_profile = profile
-
-
-    def persist_volume_profile():
-        nonlocal volume_dirty, volume_profiles, current_volume_profile
+    def persist_volume():
+        nonlocal volume_dirty
         if not volume_dirty:
             return True
-
-        target_profile = 'default' if display_on else 'night'
-        default_arg = volume if target_profile == 'default' else None
-        night_arg = volume if target_profile == 'night' else None
-        success = set_volume_settings(default_arg, night_arg, log_path)
+        success = set_volume(volume, log_path)
         if success:
-            volume_profiles = get_volume_settings(log_path)
-            current_volume_profile = target_profile
             volume_dirty = False
         else:
             log_message(log_path, "[Volume] Speichern fehlgeschlagen ({}%).".format(volume))
@@ -740,15 +730,21 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
 
         display_on = target_state
 
-        if not volume_mode:
-            apply_volume_profile(target_state)
-
         if source == "manual":
             manual_override_active = True
             manual_override_state = target_state
+            # Persistiere zentralen Zustand
+            try:
+                set_display_state('on' if target_state else 'off', log_path)
+            except Exception:
+                pass
         elif source == "schedule":
             manual_override_active = False
             manual_override_state = target_state
+            try:
+                set_display_state('on' if target_state else 'off', log_path)
+            except Exception:
+                pass
         elif source == "init":
             manual_override_active = False
             manual_override_state = target_state
@@ -772,34 +768,26 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
 
         return state_changed
     
-    # Initiales Display-Check beim Start
+    # Initialer Display-Zustand: NICHT per Zeitplan erzwingen, sondern bisherigen Zustand beibehalten.
+    # Falls keine Historie vorhanden ist, lassen wir AN und nur Helligkeit setzen.
     try:
         hour, minute, _, aktueller_tag, _, _, _ = aktualisiere_zeit()
-        should_be_on, initial_brightness = should_display_be_on(hour, minute, log_path)
-        current_brightness = initial_brightness
-
-        state_changed_init = set_display_state(
-            should_be_on,
+        set_display_state(
+            True,
             source="init",
             hour=hour,
             minute=minute,
             aktueller_tag=aktueller_tag,
             show_feedback=False,
-            log_entry="[Display Init] {} (Helligkeit: {})".format(
-                'AN' if should_be_on else 'AUS',
-                current_brightness,
-            ),
-            brightness_override=initial_brightness,
+            log_entry="[Display Init] AN (Helligkeit: {})".format(current_brightness),
+            brightness_override=current_brightness,
             force_refresh=True,
         )
         if power_mode_active and np:
             try:
                 np.brightness(255)
-                if should_be_on:
-                    update_leds_based_on_time(np, hour, minute)
+                update_leds_based_on_time(np, hour, minute)
                 current_brightness = 255
-                if state_changed_init and log_path:
-                    log_message(log_path, "[Display Init] Power-Modus aktiv – LEDs auf 100%")
             except Exception as e:
                 log_message(log_path, "[Display Init Power-Modus Fehler] {}".format(str(e)))
     except Exception as e:
@@ -810,7 +798,7 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
         global display_toggle_enabled, last_menu_exit_time
         try:
             if volume_mode:
-                persist_volume_profile()
+                persist_volume()
             menumode = False
             volume_mode = False 
             display_toggle_enabled = True  # Display-Toggle nach Menue wieder aktivieren
@@ -1014,7 +1002,7 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                     if lcd:
                         lcd.clear()
                         lcd.putstr("Volume: " + str(volume) + "%")
-                    persist_volume_profile()
+                    persist_volume()
                     fuer_elise(volume)
                     time.sleep(0.5)
                     zuruck_zur_uhranzeige()
@@ -1072,62 +1060,66 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
                     f.write("-" * 40 + "\n\n")
                 log_once_per_day(log_path, "Alarm-Reset fuer neuen Tag: RTC-Tag = {}, last_sync_day = {}".format(day, last_sync_day), day)
 
-            # Display Management (alle 60 Sekunden pruefen)
+            # Display Management – Einmal-Schalter-Logik
             try:
                 now = time.time()
-                if now - last_display_check > 60:  # Alle 60 Sekunden
-                    should_be_on, target_brightness = should_display_be_on(hour, minute, log_path)
-
-                    if manual_override_active:
-                        if should_be_on == manual_override_state:
-                            manual_override_active = False
-                            manual_override_state = display_on
-                            log_message(log_path, "[Override] Zeitplan entspricht jetzt dem manuellen Zustand - Override beendet")
-                        else:
-                            if not power_mode_active:
-                                try:
-                                    desired_brightness = get_brightness_for_state(manual_override_state, log_path)
-                                    if desired_brightness != current_brightness:
-                                        current_brightness = desired_brightness
-                                        if np:
-                                            np.brightness(current_brightness)
-                                            if manual_override_state and display_on:
-                                                try:
-                                                    update_leds_based_on_time(np, hour, minute)
-                                                except Exception as e:
-                                                    log_message(log_path, "[Override LED Fehler] {}".format(str(e)))
-                                except Exception as e:
-                                    log_message(log_path, "[Override Brightness Fehler] {}".format(str(e)))
-                            last_display_check = now
-                            continue
-                    
-                    # Display Ein/Aus aendern wenn noetig
-                    if should_be_on != display_on:
-                        state_changed = set_display_state(
-                            should_be_on,
-                            source="schedule",
-                            hour=hour,
-                            minute=minute,
-                            aktueller_tag=aktueller_tag,
-                            show_feedback=False,
-                            log_entry=None,
-                            brightness_override=target_brightness,
-                        )
-                        if state_changed:
-                            log_important(log_path, "[Auto Display] {} um {:02d}:{:02d}".format('AN' if should_be_on else 'AUS', hour, minute))
-                    
-                    # Helligkeit anpassen wenn noetig (aber nicht wenn Power Modus aktiv)
-                    if not power_mode_active and target_brightness != current_brightness:
-                        current_brightness = target_brightness
-                        if np:
-                            np.brightness(current_brightness)
-                            if display_on:
-                                try:
-                                    update_leds_based_on_time(np, hour, minute)
-                                except Exception as e:
-                                    log_message(log_path, "[LED Update Fehler] {}".format(str(e)))
-                    
+                if now - last_display_check > 30:  # Check alle 30s
                     last_display_check = now
+                    sched = get_display_schedule(log_path)
+                    # Zeiten in Minuten
+                    def _to_min(ts):
+                        try:
+                            h=int(ts[:2]); m=int(ts[3:5]); return h*60+m
+                        except Exception:
+                            return 0
+                    on_m = _to_min(sched['on_time'])
+                    off_m = _to_min(sched['off_time'])
+                    cur_m = hour*60 + minute
+
+                    # Tagesgrenze: wenn neuer Tag erkannt (bereits vorhanden oben), hier keine Aktion
+                    # Einmal-Schalter: nur GENAU bei Zeitpunkten schalten
+                    # 1) AUS-Schaltung exakt zur Off-Zeit
+                    if sched['auto'] and cur_m == off_m:
+                        if display_on:
+                            set_display_state(
+                                False,
+                                source="schedule",
+                                hour=hour,
+                                minute=minute,
+                                aktueller_tag=aktueller_tag,
+                                show_feedback=False,
+                                log_entry="[Auto Display] AUS um {:02d}:{:02d}".format(hour, minute),
+                                brightness_override=get_brightness_for_state(False, log_path),
+                            )
+                        manual_override_active = False  # Override beendet an Schaltzeit
+
+                    # 2) AN-Schaltung exakt zur On-Zeit
+                    if sched['auto'] and cur_m == on_m:
+                        if not display_on:
+                            set_display_state(
+                                True,
+                                source="schedule",
+                                hour=hour,
+                                minute=minute,
+                                aktueller_tag=aktueller_tag,
+                                show_feedback=False,
+                                log_entry="[Auto Display] AN um {:02d}:{:02d}".format(hour, minute),
+                                brightness_override=get_brightness_for_state(True, log_path),
+                            )
+                        manual_override_active = False
+
+                    # Helligkeit ggf. an den aktuellen Zustand anpassen (ohne Power-Mode)
+                    if not power_mode_active:
+                        try:
+                            desired = get_brightness_for_state(display_on, log_path)
+                            if desired != current_brightness:
+                                current_brightness = desired
+                                if np:
+                                    np.brightness(current_brightness)
+                                    if display_on:
+                                        update_leds_based_on_time(np, hour, minute)
+                        except Exception as e:
+                            log_message(log_path, "[Helligkeit Sync Fehler] {}".format(str(e)))
             except Exception as e:
                 log_message(log_path, "[Display Management Fehler] {}".format(str(e)))
 
@@ -1153,7 +1145,7 @@ def run_clock_program(lcd, np, wlan, log_path=None, ladebalken_anzeigen_func=Non
 
             if volume_mode and time.time() - volume_last_interaction > volume_timeout:
                 volume_mode = False
-                persist_volume_profile()
+                persist_volume()
                 zuruck_zur_uhranzeige()
                 fuer_elise(volume)
 

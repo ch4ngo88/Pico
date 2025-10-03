@@ -11,8 +11,8 @@ _DEFAULT_SETTINGS = {
     'BRIGHTNESS_DAY': '64',
     'BRIGHTNESS_NIGHT': '16',
     'LED_POWER_MODE': 'normal',
-    'VOLUME_DEFAULT': '50',
-    'VOLUME_NIGHT': '30',
+    'VOLUME_PERCENT': '50',
+    'DISPLAY_STATE': 'on',  # zentraler Schalter: 'on'|'off'
 }
 
 _VALID_LED_POWER_MODES = ('normal', 'boost')
@@ -20,7 +20,7 @@ _VALID_LED_POWER_MODES = ('normal', 'boost')
 
 def _clamp_volume(value, fallback=None):
     if fallback is None:
-        fallback = int(_DEFAULT_SETTINGS['VOLUME_DEFAULT'])
+        fallback = int(_DEFAULT_SETTINGS['VOLUME_PERCENT'])
     try:
         return max(0, min(100, int(value)))
     except Exception:
@@ -172,6 +172,9 @@ def set_led_power_mode(mode, log_path=None):
         for key, default_value in _DEFAULT_SETTINGS.items():
             settings.setdefault(key, default_value)
 
+        settings.pop('VOLUME_DEFAULT', None)
+        settings.pop('VOLUME_NIGHT', None)
+
         settings['LED_POWER_MODE'] = normalized
 
         order = [
@@ -181,8 +184,8 @@ def set_led_power_mode(mode, log_path=None):
             'BRIGHTNESS_DAY',
             'BRIGHTNESS_NIGHT',
             'LED_POWER_MODE',
-            'VOLUME_DEFAULT',
-            'VOLUME_NIGHT',
+            'VOLUME_PERCENT',
+            'DISPLAY_STATE',
         ]
 
         tmp_path = "/sd/power_config.tmp"
@@ -217,32 +220,24 @@ def set_led_power_mode(mode, log_path=None):
         return False
 
 
-def get_volume_settings(log_path=None):
-    """Gibt die Lautstaerke-Profile (default/night) als Dictionary zurueck."""
+def get_volume(log_path=None):
+    """Gibt die konfigurierte Lautstaerke in Prozent zurueck."""
     try:
         settings = _load_settings()
-        default_vol = _clamp_volume(
-            settings.get('VOLUME_DEFAULT', _DEFAULT_SETTINGS['VOLUME_DEFAULT']),
-            int(_DEFAULT_SETTINGS['VOLUME_DEFAULT'])
-        )
-        night_vol = _clamp_volume(
-            settings.get('VOLUME_NIGHT', _DEFAULT_SETTINGS['VOLUME_NIGHT']),
-            int(_DEFAULT_SETTINGS['VOLUME_NIGHT'])
-        )
-        return {'default': default_vol, 'night': night_vol}
+        if 'VOLUME_PERCENT' not in settings and 'VOLUME_DEFAULT' in settings:
+            # Abwärtskompatibilität: alte Configs mit VOLUME_DEFAULT übernehmen
+            settings['VOLUME_PERCENT'] = settings['VOLUME_DEFAULT']
+        volume = _clamp_volume(settings.get('VOLUME_PERCENT', _DEFAULT_SETTINGS['VOLUME_PERCENT']))
+        return volume
     except Exception as e:
         log_message(log_path, "[Power Settings] Volume Fallback: {}".format(str(e)))
-        return {
-            'default': int(_DEFAULT_SETTINGS['VOLUME_DEFAULT']),
-            'night': int(_DEFAULT_SETTINGS['VOLUME_NIGHT'])
-        }
+        return int(_DEFAULT_SETTINGS['VOLUME_PERCENT'])
 
 
-def set_volume_settings(default_volume=None, night_volume=None, log_path=None):
-    """Persistiert Lautstaerke-Profile in power_config.txt."""
+def set_volume(volume, log_path=None):
+    """Speichert die Lautstaerke in power_config.txt."""
     try:
-        if default_volume is None and night_volume is None:
-            return True
+        clamped = str(_clamp_volume(volume))
 
         settings = {}
         try:
@@ -257,21 +252,16 @@ def set_volume_settings(default_volume=None, night_volume=None, log_path=None):
         for key, default_value in _DEFAULT_SETTINGS.items():
             settings.setdefault(key, default_value)
 
-        changed = False
-        if default_volume is not None:
-            clamped_default = str(_clamp_volume(default_volume, int(_DEFAULT_SETTINGS['VOLUME_DEFAULT'])))
-            if settings.get('VOLUME_DEFAULT') != clamped_default:
-                settings['VOLUME_DEFAULT'] = clamped_default
-                changed = True
+        # Altes Feld aufraeumen, falls vorhanden
+        if 'VOLUME_DEFAULT' in settings:
+            settings.pop('VOLUME_DEFAULT', None)
+        if 'VOLUME_NIGHT' in settings:
+            settings.pop('VOLUME_NIGHT', None)
 
-        if night_volume is not None:
-            clamped_night = str(_clamp_volume(night_volume, int(_DEFAULT_SETTINGS['VOLUME_NIGHT'])))
-            if settings.get('VOLUME_NIGHT') != clamped_night:
-                settings['VOLUME_NIGHT'] = clamped_night
-                changed = True
-
-        if not changed:
+        if settings.get('VOLUME_PERCENT') == clamped:
             return True
+
+        settings['VOLUME_PERCENT'] = clamped
 
         order = [
             'DISPLAY_AUTO',
@@ -280,8 +270,8 @@ def set_volume_settings(default_volume=None, night_volume=None, log_path=None):
             'BRIGHTNESS_DAY',
             'BRIGHTNESS_NIGHT',
             'LED_POWER_MODE',
-            'VOLUME_DEFAULT',
-            'VOLUME_NIGHT',
+            'VOLUME_PERCENT',
+            'DISPLAY_STATE',
         ]
 
         tmp_path = "/sd/power_config.tmp"
@@ -310,9 +300,7 @@ def set_volume_settings(default_volume=None, night_volume=None, log_path=None):
             pass
 
         reload_settings()
-
-        log_message(log_path, "[Power Settings] Volume gespeichert: Tag={}%, Nacht={}%.".format(
-            settings.get('VOLUME_DEFAULT'), settings.get('VOLUME_NIGHT')))
+        log_message(log_path, "[Power Settings] Volume gespeichert: {}%.".format(clamped))
         return True
     except Exception as e:
         log_message(log_path, "[Power Settings] Volume Schreiben Fehler: {}".format(str(e)))
@@ -322,3 +310,98 @@ def set_volume_settings(default_volume=None, night_volume=None, log_path=None):
 def reload_settings():
     """Erzwingt Neuladen der Einstellungen"""
     _load_settings(force_reload=True)
+
+
+def get_display_schedule(log_path=None):
+    """Liest den Display-Zeitplan (Auto, Ein-/Aus-Zeit) aus der power_config.txt.
+    Rueckgabe: { 'auto': bool, 'on_time': 'HH:MM', 'off_time': 'HH:MM' }
+    """
+    try:
+        settings = _load_settings()
+        return {
+            'auto': settings.get('DISPLAY_AUTO', 'true') == 'true',
+            'on_time': settings.get('DISPLAY_ON_TIME', _DEFAULT_SETTINGS['DISPLAY_ON_TIME']),
+            'off_time': settings.get('DISPLAY_OFF_TIME', _DEFAULT_SETTINGS['DISPLAY_OFF_TIME']),
+        }
+    except Exception as e:
+        log_message(log_path, "[Power Settings] Schedule Fallback: {}".format(str(e)))
+        return {
+            'auto': True,
+            'on_time': _DEFAULT_SETTINGS['DISPLAY_ON_TIME'],
+            'off_time': _DEFAULT_SETTINGS['DISPLAY_OFF_TIME'],
+        }
+
+
+def get_display_state(log_path=None):
+    """Liest den zentralen Display-Status 'on'|'off' aus power_config.txt."""
+    try:
+        settings = _load_settings()
+        state = (settings.get('DISPLAY_STATE', _DEFAULT_SETTINGS['DISPLAY_STATE']) or 'on').strip().lower()
+        return 'on' if state == 'on' else 'off'
+    except Exception as e:
+        log_message(log_path, "[Power Settings] Display-State Fallback: {}".format(str(e)))
+        return _DEFAULT_SETTINGS['DISPLAY_STATE']
+
+
+def set_display_state(state, log_path=None):
+    """Schreibt den zentralen Display-Status in power_config.txt. state: 'on'|'off'"""
+    try:
+        normalized = 'on' if str(state).strip().lower() == 'on' else 'off'
+
+        settings = {}
+        try:
+            with open("/sd/power_config.txt", "r") as f:
+                for line in f:
+                    if '=' in line:
+                        key, value = line.strip().split('=', 1)
+                        settings[key] = value.strip()
+        except OSError:
+            settings = {}
+
+        for key, default_value in _DEFAULT_SETTINGS.items():
+            settings.setdefault(key, default_value)
+
+        settings['DISPLAY_STATE'] = normalized
+
+        order = [
+            'DISPLAY_AUTO',
+            'DISPLAY_ON_TIME',
+            'DISPLAY_OFF_TIME',
+            'BRIGHTNESS_DAY',
+            'BRIGHTNESS_NIGHT',
+            'LED_POWER_MODE',
+            'VOLUME_PERCENT',
+            'DISPLAY_STATE',
+        ]
+
+        tmp_path = "/sd/power_config.tmp"
+        with open(tmp_path, "w") as f:
+            for key in order:
+                if key in settings:
+                    f.write("{}={}\n".format(key, settings[key]))
+            for key, value in settings.items():
+                if key not in order:
+                    f.write("{}={}\n".format(key, value))
+
+        try:
+            os.replace(tmp_path, "/sd/power_config.txt")
+        except AttributeError:
+            os.rename(tmp_path, "/sd/power_config.txt")
+        except OSError:
+            try:
+                os.remove("/sd/power_config.txt")
+            except OSError:
+                pass
+            os.rename(tmp_path, "/sd/power_config.txt")
+
+        try:
+            os.sync()
+        except Exception:
+            pass
+
+        reload_settings()
+        log_message(log_path, "[Power Settings] Display-State gespeichert: {}".format(normalized))
+        return True
+    except Exception as e:
+        log_message(log_path, "[Power Settings] Display-State Schreiben Fehler: {}".format(str(e)))
+        return False

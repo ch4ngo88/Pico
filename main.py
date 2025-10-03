@@ -14,7 +14,7 @@ from time_config import synchronisiere_zeit
 import joystick
 from webserver_program import set_reload_alarms_callback
 from crash_guard import check_previous_crash, clear_stage
-from power_management import get_volume_settings
+from power_management import get_volume
 
 
 # --------------------------------------------------------------------------
@@ -426,8 +426,7 @@ def main():
         ladebalken_anzeigen(lcd, "Sync Sound & LED")
     
     try:
-        volume_profiles = get_volume_settings(log_path)
-        volume = volume_profiles.get('default', 50)
+        volume = get_volume(log_path)
     except Exception:
         volume = 50  # Fallback wenn Config fehlt
     try:

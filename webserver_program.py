@@ -122,6 +122,7 @@ ALLOWED_STATIC_FILES = {
     'styles.css': {'type': 'text/css', 'safe': True, 'location': 'flash'},
     'favicon.ico': {'type': 'image/x-icon', 'safe': True, 'location': 'flash'},
     'neuza.webp': {'type': 'image/webp', 'safe': True, 'location': 'flash'},
+    'app.js': {'type': 'application/javascript', 'safe': True, 'location': 'flash'},
     
     # System files (stored on SD card /sd/)
     'debug_log.txt': {'type': 'text/plain', 'safe': True, 'location': 'sd'},
@@ -696,10 +697,16 @@ def _save_display_settings_unsafe(body, log_path=None):
             existing['BRIGHTNESS_NIGHT'] = '16'
         if 'LED_POWER_MODE' not in existing:
             existing['LED_POWER_MODE'] = 'normal'
-        if 'VOLUME_DEFAULT' not in existing:
-            existing['VOLUME_DEFAULT'] = '50'
-        if 'VOLUME_NIGHT' not in existing:
-            existing['VOLUME_NIGHT'] = '30'
+        if 'VOLUME_PERCENT' not in existing:
+            if 'VOLUME_DEFAULT' in existing:
+                existing['VOLUME_PERCENT'] = existing['VOLUME_DEFAULT']
+            else:
+                existing['VOLUME_PERCENT'] = '50'
+        # Alte Keys entfernen, damit Config sauber bleibt
+        if 'VOLUME_DEFAULT' in existing:
+            existing.pop('VOLUME_DEFAULT', None)
+        if 'VOLUME_NIGHT' in existing:
+            existing.pop('VOLUME_NIGHT', None)
 
         def _valid_time(ts):
             try:
@@ -729,8 +736,8 @@ def _save_display_settings_unsafe(body, log_path=None):
             'BRIGHTNESS_DAY',
             'BRIGHTNESS_NIGHT',
             'LED_POWER_MODE',
-            'VOLUME_DEFAULT',
-            'VOLUME_NIGHT'
+            'VOLUME_PERCENT',
+            'DISPLAY_STATE'
         ]
 
         tmp_path = "/sd/power_config.tmp"
@@ -783,8 +790,7 @@ def _load_display_settings():
             'DISPLAY_ON_TIME': '07:00',
             'DISPLAY_OFF_TIME': '22:00',
             'LED_POWER_MODE': 'normal',
-            'VOLUME_DEFAULT': '50',
-            'VOLUME_NIGHT': '30'
+            'VOLUME_PERCENT': '50'
         }
         if file_exists("/sd/power_config.txt"):
             with open("/sd/power_config.txt", "r") as f:
@@ -795,6 +801,8 @@ def _load_display_settings():
                         value = value.strip()
                         if key in settings:  # Nur relevante Keys laden
                             settings[key] = value
+                        elif key == 'VOLUME_DEFAULT':  # Abwärtskompatibilität
+                            settings['VOLUME_PERCENT'] = value
         return settings
     except Exception:
         return {
@@ -802,8 +810,7 @@ def _load_display_settings():
             'DISPLAY_ON_TIME': '07:00',
             'DISPLAY_OFF_TIME': '22:00',
             'LED_POWER_MODE': 'normal',
-            'VOLUME_DEFAULT': '50',
-            'VOLUME_NIGHT': '30'
+            'VOLUME_PERCENT': '50'
         }
 
 
@@ -840,7 +847,7 @@ def _serve_index_page(cl, log_path=None):
 
 def _send_http_header(cl):
     """Sendet HTTP-Header memory-safe"""
-    cl.sendall(b"HTTP/1.1 200 OK\r\nContent-Type:text/html\r\nConnection: close\r\n\r\n")
+    cl.sendall(b"HTTP/1.1 200 OK\r\nContent-Type:text/html; charset=UTF-8\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n")
 
 
 def _send_html_chunks(cl, log_path=None):
@@ -854,21 +861,53 @@ def _send_html_chunks(cl, log_path=None):
 <body><header><h1>Neuza Wecker</h1></header>
 <main>
     <img src=\"neuza.webp\" alt=\"Neuza\" onerror=\"this.style.display='none'\">
-    <form id=\"alarmForm\"><p class=\"hint\">Ein Alarm wird automatisch aktiv, sobald mindestens ein Wochentag markiert ist. Ohne Auswahl bleibt er deaktiviert.</p>"""
+    <form id=\"alarmForm\">"""
     cl.sendall(chunk1)
     gc.collect()  # Nach jedem Chunk
     
     # Chunk 2: Alarm-Bloecke (Memory-sparend laden)
-    alarme = _load_alarms("/sd/alarm.txt")
-    _send_alarm_blocks_safe(cl, alarme)
+    try:
+        alarme = _load_alarms("/sd/alarm.txt")
+        _send_alarm_blocks_safe(cl, alarme)
+    except Exception as e:
+        try:
+            cl.sendall(b"<fieldset><p class='status-line'>Alarme konnten nicht geladen werden.</p></fieldset>")
+        except Exception:
+            pass
+        try:
+            log_message(log_path, "Fehler beim Streamen der Alarme: {}".format(str(e)))
+        except Exception:
+            pass
     gc.collect()  # Nach Alarmen
     
     # Chunk 3: Display-Settings
-    _send_display_block_safe(cl)
+    try:
+        _send_display_block_safe(cl)
+    except Exception as e:
+        try:
+            cl.sendall(b"<fieldset><label><input type='checkbox' id='displayAuto' checked> Automatisches Ein/Aus</label><br>"
+                       b"<label>Ein-Zeit: <input type='time' id='displayOn' value='07:00'></label><br>"
+                       b"<label>Aus-Zeit: <input type='time' id='displayOff' value='22:00'></label></fieldset>")
+        except Exception:
+            pass
+        try:
+            log_message(log_path, "Fehler beim Display-Block: {}".format(str(e)))
+        except Exception:
+            pass
     gc.collect()  # Nach Display-Block
     
     # Chunk 4: Footer und JavaScript (aufgeteilt)
-    _send_footer_chunks(cl, log_path)
+    try:
+        _send_footer_chunks(cl, log_path)
+    except Exception as e:
+        try:
+            log_message(log_path, "Fehler beim Senden des Footers: {}".format(str(e)))
+        except Exception:
+            pass
+        try:
+            cl.sendall(b"</form></main></body></html>")
+        except Exception:
+            pass
     gc.collect()  # Final cleanup
 
 
@@ -910,30 +949,45 @@ def _send_display_block_safe(cl):
     auto_enabled = settings.get('DISPLAY_AUTO', 'true') == 'true'
     on_time = settings.get('DISPLAY_ON_TIME', '07:00')
     off_time = settings.get('DISPLAY_OFF_TIME', '22:00')
-    led_mode_raw = settings.get('LED_POWER_MODE', 'normal')
-    led_mode = 'Boost' if str(led_mode_raw).strip().lower() == 'boost' else 'Normal'
+    led_mode_raw = str(settings.get('LED_POWER_MODE', 'normal') or '').strip().lower()
+    led_mode_map = {
+        'boost': 'Boost',
+        'normal': 'Normal',
+        'eco': 'Eco'
+    }
+    # MicroPython strings may not support .title(); do a simple manual capitalization fallback
+    if led_mode_raw in led_mode_map:
+        led_mode = led_mode_map[led_mode_raw]
+    elif led_mode_raw:
+        led_mode = (led_mode_raw[:1].upper() + led_mode_raw[1:])
+    else:
+        led_mode = 'Normal'
+    led_mode = html_escape(led_mode)
+
+    volume_raw = settings.get('VOLUME_PERCENT', '50')
     try:
-        vol_day = int(settings.get('VOLUME_DEFAULT', '50'))
+        volume_int = int(volume_raw)
+        if volume_int < 0:
+            volume_int = 0
+        elif volume_int > 100:
+            volume_int = 100
+        volume_text = "{}%".format(volume_int)
     except Exception:
-        vol_day = 50
-    try:
-        vol_night = int(settings.get('VOLUME_NIGHT', '30'))
-    except Exception:
-        vol_night = 30
+        volume_text = "50%"
+    volume_text = html_escape(volume_text)
 
     block = '''<fieldset>
 <label><input type="checkbox" id="displayAuto" {}> Automatisches Ein/Aus</label><br>
 <label>Ein-Zeit: <input type="time" id="displayOn" value="{}"></label><br>
 <label>Aus-Zeit: <input type="time" id="displayOff" value="{}"></label><br>
-<p class="status-line">Power-Modus: {}</p>
-<p class="status-line">Lautst&auml;rke (Tag / Nacht): {}% / {}%</p>
+<p class="status-line">LED-Leistung: {}</p>
+<p class="status-line">Lautst&auml;rke: {}</p>
 </fieldset>\n'''.format(
         "checked" if auto_enabled else "",
-        on_time,
-        off_time,
+        html_escape(on_time),
+        html_escape(off_time),
         led_mode,
-        vol_day,
-        vol_night
+        volume_text
     )
     cl.sendall(block.encode())
 
@@ -942,16 +996,37 @@ def _send_footer_chunks(cl, log_path=None):
     """Minimaler Abschluss: nur Save-Button und JS, kein Footer"""
     import gc
     minimal = '''<div>
-<button id="saveButton" type="button" onclick="saveAllSettings()">Speichern</button>
+<button id="saveButton" type="button" onclick="window._fallbackSave && _fallbackSave()">Speichern</button>
 <a href="/logs">Logs</a>
 </div>
 </form></main>'''
-    cl.sendall(minimal.encode())
+    try:
+        cl.sendall(minimal.encode())
+    except Exception:
+        pass
     gc.collect()
-    js_complete = "<script>" + JS_SNIPPET + "</script>"
-    cl.sendall(js_complete.encode())
+    # Kleiner Inline-Fallback (nur Display-Settings speichern), falls app.js fehlt
+    try:
+        fallback = (
+            "<script>(function(){" 
+            "function _fallbackSave(){try{var b=document.getElementById('saveButton');if(b){b.disabled=true;b.textContent='Speichern...';}" 
+            "var da=document.getElementById('displayAuto'),don=document.getElementById('displayOn'),doff=document.getElementById('displayOff');" 
+            "if(da&&don&&doff){var d=['DISPLAY_AUTO='+(da.checked?'true':'false'),'DISPLAY_ON_TIME='+don.value,'DISPLAY_OFF_TIME='+doff.value];" 
+            "var x=new XMLHttpRequest();x.open('POST','/save_display_settings',true);" 
+            "x.onreadystatechange=function(){if(x.readyState===4){if(b){b.textContent=(x.status>=200&&x.status<300)?'Gespeichert':'Fehler';setTimeout(function(){b.disabled=false;b.textContent='Speichern';},2000);}}};" 
+            "x.send(d.join('\\n'));}}catch(e){}}" 
+            "if(!window.saveAllSettings){try{window._fallbackSave=_fallbackSave;}catch(e){}}})();</script>"
+        )
+        cl.sendall(fallback.encode())
+    except Exception:
+        pass
     gc.collect()
-    cl.sendall(b"</body></html>")
+
+    # Binde externes Script ein (aus Flash), spart RAM und Parser-Probleme
+    try:
+        cl.sendall(b"<script src=\"app.js\"></script></body></html>")
+    except Exception:
+        pass
 
 
 # Alte _split_javascript entfernt - JavaScript wird jetzt als komplettes Stueck gesendet
@@ -996,7 +1071,95 @@ def _load_alarms(path):
 
 # Alte _render_index() und INDEX_TEMPLATE entfernt - ersetzt durch Streaming-System (_send_html_chunks)
 
-JS_SNIPPET = """async function saveAllSettings(){const b=document.getElementById('saveButton');if(!b)return;b.disabled=true;b.textContent='Speichern…';const a=[],bs=document.querySelectorAll('#alarmForm fieldset');for(const x of bs){const t=x.querySelector('input[type=\"time\"]'),m=x.querySelector('input[type=\"text\"]');if(!t||!m)continue;const tv=t.value.trim(),mv=m.value.trim();if(!tv&&!mv)continue;const c=x.querySelectorAll('input[type=\"checkbox\"]');const g=new Set;for(const cb of c){const l=cb.parentElement.textContent.trim();if(cb.checked&&(l==='Mo'||l==='Di'||l==='Mi'||l==='Do'||l==='Fr'||l==='Sa'||l==='So'))g.add(l);}const days=Array.from(g).sort();const active=days.length>0;a.push([tv,mv||'Kein Text',days.join(','),active?'Aktiv':'Inaktiv'].join(','));}let ok1=true,ok2=true;if(a.length){try{const r1=await fetch('/save_alarms',{method:'POST',headers:{'Content-Type':'text/plain'},body=a.join('\\n')});ok1=r1.ok;}catch(e){ok1=false;}}try{const da=document.getElementById('displayAuto'),don=document.getElementById('displayOn'),doff=document.getElementById('displayOff');if(da&&don&&doff){const d=['DISPLAY_AUTO='+da.checked,'DISPLAY_ON_TIME='+don.value,'DISPLAY_OFF_TIME='+doff.value];const r2=await fetch('/save_display_settings',{method:'POST',body:d.join('\\n')});ok2=r2.ok;}else ok2=false;}catch(e){ok2=false;}b.textContent=ok1&&ok2?'Gespeichert':'Fehler';setTimeout(()=>{b.disabled=false;b.textContent='Speichern';},2000);}"""
+JS_SNIPPET = """
+function saveAllSettings(){
+    var b=document.getElementById('saveButton');
+    if(!b){return;}
+    b.disabled=true; b.textContent='Speichern...';
+
+    var a=[];
+    var bs=document.querySelectorAll('#alarmForm fieldset');
+    for(var i=0;i<bs.length;i++){
+        var x=bs[i];
+        var t=x.querySelector('input[type="time"]');
+        var m=x.querySelector('input[type="text"]');
+        if(!t||!m){continue;}
+        var tv=(t.value||'').trim();
+        var mv=(m.value||'').trim();
+        if(!tv&&!mv){continue;}
+        var c=x.querySelectorAll('input[type="checkbox"]');
+        var daySet={};
+        for(var j=0;j<c.length;j++){
+            var cb=c[j];
+            var label=(cb.parentElement && cb.parentElement.textContent)?cb.parentElement.textContent.trim():'';
+            if(cb.checked && (label==='Mo'||label==='Di'||label==='Mi'||label==='Do'||label==='Fr'||label==='Sa'||label==='So')){
+                daySet[label]=true;
+            }
+        }
+        var days=[];
+        for(var k in daySet){ if(daySet.hasOwnProperty(k)){ days.push(k); } }
+        days.sort();
+        var active = days.length>0 ? 'Aktiv' : 'Inaktiv';
+        a.push([tv, mv||'Kein Text', days.join(','), active].join(','));
+    }
+
+    function post(url, body, headers, cb){
+        try{
+            var xhr=new XMLHttpRequest();
+            xhr.open('POST', url, true);
+            if(headers){
+                for(var h in headers){ if(headers.hasOwnProperty(h)){ xhr.setRequestHeader(h, headers[h]); } }
+            }
+            xhr.onreadystatechange=function(){
+                if(xhr.readyState===4){ cb(xhr.status>=200 && xhr.status<300); }
+            };
+            xhr.send(body);
+        }catch(e){ cb(false); }
+    }
+
+    var ok1=true, ok2=true;
+    var pending=0;
+
+    function finish(){
+    b.textContent=(ok1&&ok2)?'Gespeichert':'Fehler';
+    setTimeout(function(){ b.disabled=false; b.textContent='Speichern'; }, 2000);
+    }
+
+    if(a.length){
+        pending++;
+        post('/save_alarms', a.join('\n'), {'Content-Type':'text/plain'}, function(success){ ok1=success; if(--pending===0){ finish(); } });
+    }
+
+    var da=document.getElementById('displayAuto');
+    var don=document.getElementById('displayOn');
+    var doff=document.getElementById('displayOff');
+    if(da&&don&&doff){
+        pending++;
+        var d=[
+            'DISPLAY_AUTO='+(da.checked?'true':'false'),
+            'DISPLAY_ON_TIME='+don.value,
+            'DISPLAY_OFF_TIME='+doff.value
+        ];
+        post('/save_display_settings', d.join('\n'), null, function(success){ ok2=success; if(--pending===0){ finish(); } });
+    }
+
+    if(pending===0){ finish(); }
+}
+// Exponiere Funktion global
+try{ window.saveAllSettings = saveAllSettings; }catch(e){}
+// Button-Handler sicher binden (sofort oder nach DOMContentLoaded)
+(function(){
+    function bind(){
+        var b=document.getElementById('saveButton');
+        if(b && !b._saveBound){ b._saveBound=true; b.addEventListener('click', saveAllSettings); try{ console.log('Save-Button gebunden'); }catch(e){} }
+    }
+    if(document.readyState==='complete' || document.readyState==='interactive'){
+        bind();
+    }else{
+        try{ document.addEventListener('DOMContentLoaded', bind); }catch(e){ setTimeout(bind, 200); }
+    }
+})();
+"""
 
 
 # --------------------------------------------------------------------

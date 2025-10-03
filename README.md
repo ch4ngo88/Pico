@@ -128,7 +128,7 @@ Pico/
 # Persoenliche Nachrichten hinzufuegen
 # Display-Zeiten nach Schlafenszeiten anpassen
 # LED Power Modus in /sd/power_config.txt setzen (LED_POWER_MODE=normal|boost)
-# Lautstaerke-Profile in /sd/power_config.txt pflegen (VOLUME_DEFAULT/VOLUME_NIGHT)
+# Lautstaerke ueber /sd/power_config.txt steuern (VOLUME_PERCENT=0-100)
 ```
 
 ## 🎵 Besondere Features
