@@ -111,8 +111,6 @@ def set_reload_alarms_callback(func):
     global reload_alarms_callback
     reload_alarms_callback = func
 
-# LED-Toggle via Web abgeschafft – Steuerung erfolgt am Geraet
-
 
 # --------------------------------------------------------------------
 #   Security & File Management
@@ -368,9 +366,7 @@ def handle_website_connection(s, log_path=None):
                 _save_display_settings(body, log_path)
                 cl.sendall(b"HTTP/1.1 200 OK\r\nContent-Type:text/plain\r\n\r\nOK")
                 _feed_wdt(log_path)
-
-            # LED/Debug Post-Endpunkte entfernt
-
+            
             elif path in ("/", "/index.html"):
                 _feed_wdt(log_path)
                 _serve_index_page(cl, log_path)
@@ -517,6 +513,10 @@ def _save_alarms_unsafe(body, log_path=None):
                         tage.append(eintrag)
                     elif eintrag.lower() == "aktiv":
                         status = "Aktiv"
+                
+                # KRITISCH: Wenn keine Tage ausgewaehlt → Status MUSS Inaktiv sein
+                if len(tage) == 0:
+                    status = "Inaktiv"
 
                 f.write("TIME=" + uhrzeit + "\nTEXT=" + text + "\n")
                 f.write("DAYS=" + (','.join(tage) if tage else '-') + "\n")
@@ -669,11 +669,37 @@ def _serve_log_file(cl, log_path=None):
 # --------------------------------------------------------------------
 def _save_display_settings_unsafe(body, log_path=None):
     try:
-        settings = {}
+        incoming = {}
         for line in body.strip().split('\n'):
             if '=' in line:
                 key, value = line.split('=', 1)
-                settings[key.strip()] = value.strip()
+                incoming[key.strip()] = value.strip()
+
+        existing = {}
+        if file_exists("/sd/power_config.txt"):
+            with open("/sd/power_config.txt", "r") as src:
+                for line in src:
+                    if '=' in line:
+                        key, value = line.strip().split('=', 1)
+                        existing[key.strip()] = value.strip()
+
+        # Defaults fuer fehlende Werte sicherstellen
+        if 'DISPLAY_AUTO' not in existing:
+            existing['DISPLAY_AUTO'] = 'true'
+        if 'DISPLAY_ON_TIME' not in existing:
+            existing['DISPLAY_ON_TIME'] = '07:00'
+        if 'DISPLAY_OFF_TIME' not in existing:
+            existing['DISPLAY_OFF_TIME'] = '22:00'
+        if 'BRIGHTNESS_DAY' not in existing:
+            existing['BRIGHTNESS_DAY'] = '64'
+        if 'BRIGHTNESS_NIGHT' not in existing:
+            existing['BRIGHTNESS_NIGHT'] = '16'
+        if 'LED_POWER_MODE' not in existing:
+            existing['LED_POWER_MODE'] = 'normal'
+        if 'VOLUME_DEFAULT' not in existing:
+            existing['VOLUME_DEFAULT'] = '50'
+        if 'VOLUME_NIGHT' not in existing:
+            existing['VOLUME_NIGHT'] = '30'
 
         def _valid_time(ts):
             try:
@@ -684,25 +710,61 @@ def _save_display_settings_unsafe(body, log_path=None):
             except Exception:
                 return False
 
-        auto = 'true' if settings.get('DISPLAY_AUTO', 'true').lower() == 'true' else 'false'
-        on_t = settings.get('DISPLAY_ON_TIME', '07:00')
-        off_t = settings.get('DISPLAY_OFF_TIME', '22:00')
+        auto = 'true' if incoming.get('DISPLAY_AUTO', existing.get('DISPLAY_AUTO', 'true')).lower() == 'true' else 'false'
+        on_t = incoming.get('DISPLAY_ON_TIME', existing.get('DISPLAY_ON_TIME', '07:00'))
+        off_t = incoming.get('DISPLAY_OFF_TIME', existing.get('DISPLAY_OFF_TIME', '22:00'))
         if not _valid_time(on_t):
             on_t = '07:00'
         if not _valid_time(off_t):
             off_t = '22:00'
 
-        with open("/sd/power_config.txt", "w") as f:
-            f.write("DISPLAY_AUTO=" + auto + "\n") 
-            f.write("DISPLAY_ON_TIME=" + on_t + "\n") 
-            f.write("DISPLAY_OFF_TIME=" + off_t + "\n")
+        existing['DISPLAY_AUTO'] = auto
+        existing['DISPLAY_ON_TIME'] = on_t
+        existing['DISPLAY_OFF_TIME'] = off_t
+
+        defaults_order = [
+            'DISPLAY_AUTO',
+            'DISPLAY_ON_TIME',
+            'DISPLAY_OFF_TIME',
+            'BRIGHTNESS_DAY',
+            'BRIGHTNESS_NIGHT',
+            'LED_POWER_MODE',
+            'VOLUME_DEFAULT',
+            'VOLUME_NIGHT'
+        ]
+
+        tmp_path = "/sd/power_config.tmp"
+        with open(tmp_path, "w") as f:
+            for key in defaults_order:
+                if key in existing:
+                    f.write("{}={}\n".format(key, existing[key]))
+            for key, value in existing.items():
+                if key not in defaults_order:
+                    f.write("{}={}\n".format(key, value))
             f.flush()
+
+        try:
+            os.replace(tmp_path, "/sd/power_config.txt")
+        except AttributeError:
+            os.rename(tmp_path, "/sd/power_config.txt")
+        except OSError:
+            try:
+                os.remove("/sd/power_config.txt")
+            except OSError:
+                pass
+            os.rename(tmp_path, "/sd/power_config.txt")
         
         # Garantiertes Sync mit Error-Handling
         try:
             os.sync()
         except Exception as e:
             log_message(log_path, "[Sync Fehler nach Display Settings] {}".format(str(e)))
+
+        try:
+            from power_management import reload_settings
+            reload_settings()
+        except Exception as e:
+            log_message(log_path, "[Power Settings] Reload nach Save fehlgeschlagen: {}".format(str(e)))
         
         log_message(log_path, "Display-Einstellungen gespeichert.")
     except Exception as e:
@@ -719,13 +781,18 @@ def _load_display_settings():
         settings = {
             'DISPLAY_AUTO': 'true',
             'DISPLAY_ON_TIME': '07:00',
-            'DISPLAY_OFF_TIME': '22:00'
+            'DISPLAY_OFF_TIME': '22:00',
+            'LED_POWER_MODE': 'normal',
+            'VOLUME_DEFAULT': '50',
+            'VOLUME_NIGHT': '30'
         }
         if file_exists("/sd/power_config.txt"):
             with open("/sd/power_config.txt", "r") as f:
                 for line in f:
                     if '=' in line:
                         key, value = line.strip().split('=', 1)
+                        key = key.strip()
+                        value = value.strip()
                         if key in settings:  # Nur relevante Keys laden
                             settings[key] = value
         return settings
@@ -733,7 +800,10 @@ def _load_display_settings():
         return {
             'DISPLAY_AUTO': 'true',
             'DISPLAY_ON_TIME': '07:00',
-            'DISPLAY_OFF_TIME': '22:00'
+            'DISPLAY_OFF_TIME': '22:00',
+            'LED_POWER_MODE': 'normal',
+            'VOLUME_DEFAULT': '50',
+            'VOLUME_NIGHT': '30'
         }
 
 
@@ -783,8 +853,8 @@ def _send_html_chunks(cl, log_path=None):
 <title>Neuza Wecker</title><link rel=\"stylesheet\" href=\"styles.css\"></head>
 <body><header><h1>Neuza Wecker</h1></header>
 <main>
-<img src=\"neuza.webp\" alt=\"Neuza\" onerror=\"this.style.display='none'\">
-<form id=\"alarmForm\">"""
+    <img src=\"neuza.webp\" alt=\"Neuza\" onerror=\"this.style.display='none'\">
+    <form id=\"alarmForm\"><p class=\"hint\">Ein Alarm wird automatisch aktiv, sobald mindestens ein Wochentag markiert ist. Ohne Auswahl bleibt er deaktiviert.</p>"""
     cl.sendall(chunk1)
     gc.collect()  # Nach jedem Chunk
     
@@ -824,16 +894,13 @@ def _generate_alarm_block(zeit, text, tage, aktiv):
         chk = "checked" if w in tage else ""
         chk_days += '<label><input type="checkbox" {}> {}</label>\n'.format(chk, w)
     
-    chk_a = "checked" if aktiv.strip().lower() == "aktiv" else ""
-    
     return '''<fieldset>
 <input type="time" value="{}">
 <input type="text" value="{}">
 <div>
 {}
-<label><input type="checkbox" {}> Aktiv</label>
 </div></fieldset>\n'''.format(
-        zeit, html_escape(text), chk_days, chk_a)
+        zeit, html_escape(text), chk_days)
 
 
 def _send_display_block_safe(cl):
@@ -843,15 +910,30 @@ def _send_display_block_safe(cl):
     auto_enabled = settings.get('DISPLAY_AUTO', 'true') == 'true'
     on_time = settings.get('DISPLAY_ON_TIME', '07:00')
     off_time = settings.get('DISPLAY_OFF_TIME', '22:00')
+    led_mode_raw = settings.get('LED_POWER_MODE', 'normal')
+    led_mode = 'Boost' if str(led_mode_raw).strip().lower() == 'boost' else 'Normal'
+    try:
+        vol_day = int(settings.get('VOLUME_DEFAULT', '50'))
+    except Exception:
+        vol_day = 50
+    try:
+        vol_night = int(settings.get('VOLUME_NIGHT', '30'))
+    except Exception:
+        vol_night = 30
 
     block = '''<fieldset>
 <label><input type="checkbox" id="displayAuto" {}> Automatisches Ein/Aus</label><br>
 <label>Ein-Zeit: <input type="time" id="displayOn" value="{}"></label><br>
 <label>Aus-Zeit: <input type="time" id="displayOff" value="{}"></label><br>
+<p class="status-line">Power-Modus: {}</p>
+<p class="status-line">Lautst&auml;rke (Tag / Nacht): {}% / {}%</p>
 </fieldset>\n'''.format(
         "checked" if auto_enabled else "",
         on_time,
-        off_time
+        off_time,
+        led_mode,
+        vol_day,
+        vol_night
     )
     cl.sendall(block.encode())
 
@@ -914,7 +996,7 @@ def _load_alarms(path):
 
 # Alte _render_index() und INDEX_TEMPLATE entfernt - ersetzt durch Streaming-System (_send_html_chunks)
 
-JS_SNIPPET = """async function saveAllSettings(){const b=document.getElementById('saveButton');if(!b)return;b.disabled=true;b.textContent='Speichern…';const a=[],bs=document.querySelectorAll('#alarmForm fieldset');for(const x of bs){const t=x.querySelector('input[type=\"time\"]'),m=x.querySelector('input[type=\"text\"]');if(!t||!m)continue;const tv=t.value.trim(),mv=m.value.trim();if(!tv&&!mv)continue;const c=x.querySelectorAll('input[type=\"checkbox\"]');const g=new Set;let ak=false;for(const cb of c){const l=cb.parentElement.textContent.trim();if(l==='Aktiv')ak=cb.checked;else if(cb.checked&&(l==='Mo'||l==='Di'||l==='Mi'||l==='Do'||l==='Fr'||l==='Sa'||l==='So'))g.add(l);}a.push([tv,mv||'Kein Text',Array.from(g).sort().join(','),ak?'Aktiv':'Inaktiv'].join(','));}let ok1=true,ok2=true;if(a.length){try{const r1=await fetch('/save_alarms',{method:'POST',headers:{'Content-Type':'text/plain'},body:a.join('\\n')});ok1=r1.ok;}catch(e){ok1=false;}}try{const da=document.getElementById('displayAuto'),don=document.getElementById('displayOn'),doff=document.getElementById('displayOff');if(da&&don&&doff){const d=['DISPLAY_AUTO='+da.checked,'DISPLAY_ON_TIME='+don.value,'DISPLAY_OFF_TIME='+doff.value];const r2=await fetch('/save_display_settings',{method:'POST',body:d.join('\\n')});ok2=r2.ok;}else ok2=false;}catch(e){ok2=false;}b.textContent=ok1&&ok2?'Gespeichert':'Fehler';setTimeout(()=>{b.disabled=false;b.textContent='Speichern';},2000);}"""
+JS_SNIPPET = """async function saveAllSettings(){const b=document.getElementById('saveButton');if(!b)return;b.disabled=true;b.textContent='Speichern…';const a=[],bs=document.querySelectorAll('#alarmForm fieldset');for(const x of bs){const t=x.querySelector('input[type=\"time\"]'),m=x.querySelector('input[type=\"text\"]');if(!t||!m)continue;const tv=t.value.trim(),mv=m.value.trim();if(!tv&&!mv)continue;const c=x.querySelectorAll('input[type=\"checkbox\"]');const g=new Set;for(const cb of c){const l=cb.parentElement.textContent.trim();if(cb.checked&&(l==='Mo'||l==='Di'||l==='Mi'||l==='Do'||l==='Fr'||l==='Sa'||l==='So'))g.add(l);}const days=Array.from(g).sort();const active=days.length>0;a.push([tv,mv||'Kein Text',days.join(','),active?'Aktiv':'Inaktiv'].join(','));}let ok1=true,ok2=true;if(a.length){try{const r1=await fetch('/save_alarms',{method:'POST',headers:{'Content-Type':'text/plain'},body=a.join('\\n')});ok1=r1.ok;}catch(e){ok1=false;}}try{const da=document.getElementById('displayAuto'),don=document.getElementById('displayOn'),doff=document.getElementById('displayOff');if(da&&don&&doff){const d=['DISPLAY_AUTO='+da.checked,'DISPLAY_ON_TIME='+don.value,'DISPLAY_OFF_TIME='+doff.value];const r2=await fetch('/save_display_settings',{method:'POST',body:d.join('\\n')});ok2=r2.ok;}else ok2=false;}catch(e){ok2=false;}b.textContent=ok1&&ok2?'Gespeichert':'Fehler';setTimeout(()=>{b.disabled=false;b.textContent='Speichern';},2000);}"""
 
 
 # --------------------------------------------------------------------

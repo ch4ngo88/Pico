@@ -127,6 +127,8 @@ Pico/
 # Alarm-Zeiten ueber Web-Interface einstellen
 # Persoenliche Nachrichten hinzufuegen
 # Display-Zeiten nach Schlafenszeiten anpassen
+# LED Power Modus in /sd/power_config.txt setzen (LED_POWER_MODE=normal|boost)
+# Lautstaerke-Profile in /sd/power_config.txt pflegen (VOLUME_DEFAULT/VOLUME_NIGHT)
 ```
 
 ## 🎵 Besondere Features

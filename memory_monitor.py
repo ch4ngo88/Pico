@@ -6,6 +6,7 @@ from log_utils import log_message, log_once_per_day
 # Memory Management & Diagnose
 # --------------------------------------------------------------------
 _last_gc_time = 0
+_last_gc_log_time = 0
 _gc_counter = 0
 _memory_history = []  # Speicher-Verlauf fuer Diagnose (Tuples)
 _boot_memory = None   # Speicher direkt nach Boot
@@ -68,7 +69,7 @@ def monitor_memory(log_path=None, force_gc=False, context=""):
     """
     ueberwacht Speicherverbrauch mit detaillierter Diagnose.
     """
-    global _last_gc_time, _gc_counter
+    global _last_gc_time, _last_gc_log_time, _gc_counter
     
     try:
         import time
@@ -93,13 +94,18 @@ def monitor_memory(log_path=None, force_gc=False, context=""):
             boot_loss = _boot_memory - free_after if _boot_memory else 0
             
             # Log-Spam eliminiert: nur bei bedeutender Aenderung (>=32KB) oder forced GC
-            SHOULD_LOG_GC = (
-                force_gc or
-                (freed >= 32768)  # >= 32KB freigegeben
-            )
+            SHOULD_LOG_GC = False
+            if force_gc:
+                SHOULD_LOG_GC = True
+            else:
+                SIGNIFICANT_FREE = freed >= 65536  # >= 64KB freigegeben
+                ENOUGH_TIME = (_last_gc_log_time == 0) or ((now - _last_gc_log_time) >= 600)
+                if SIGNIFICANT_FREE and ENOUGH_TIME:
+                    SHOULD_LOG_GC = True
             if SHOULD_LOG_GC:
                 log_message(log_path, "[Memory] GC #{}: {}KB frei (+{}), Boot-Verlust: {}KB".format(
                     _gc_counter, free_after//1024, freed, boot_loss//1024))
+                _last_gc_log_time = now
             
             # Analysiere Trend alle 10 GCs
             if _gc_counter % 10 == 0:

@@ -14,6 +14,7 @@ from time_config import synchronisiere_zeit
 import joystick
 from webserver_program import set_reload_alarms_callback
 from crash_guard import check_previous_crash, clear_stage
+from power_management import get_volume_settings
 
 
 # --------------------------------------------------------------------------
@@ -424,7 +425,11 @@ def main():
     if lcd:
         ladebalken_anzeigen(lcd, "Sync Sound & LED")
     
-    volume = 50  # Initialize volume regardless of sound test outcome
+    try:
+        volume_profiles = get_volume_settings(log_path)
+        volume = volume_profiles.get('default', 50)
+    except Exception:
+        volume = 50  # Fallback wenn Config fehlt
     try:
         # Nur kurzer Test-Ton, keine ganze Melodie beim Booten!
         from sound_config import play_note
